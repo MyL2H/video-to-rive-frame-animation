@@ -1,0 +1,3 @@
+interface:
+  display_name: "Video to Rive Frame Animation"
+  short_description: "Turn one or more videos into optimized Rive frame animations"
