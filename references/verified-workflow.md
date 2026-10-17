@@ -1,6 +1,6 @@
 # Verified Workflow and Constraints
 
-This document records the complete workflow demonstrated on a 24 FPS character video and the checks that caught real errors during implementation. Numbers in the observed example are evidence from one run, not performance guarantees.
+This document records the frame-processing and base Rive invariants demonstrated on a 24 FPS character video and the checks that caught real errors during implementation. For the default interruptible combined project, also follow `interruptible-multi-action.md`. Numbers in the observed example are evidence from one run, not performance guarantees.
 
 ## Default request handling
 
@@ -17,9 +17,10 @@ Apply this profile without asking for more parameters:
 3. Produce transparent full-resolution PNG frames.
 4. Resize to 50% with Lanczos.
 5. Produce optimized PNG and RGBA WebP at quality 82 and method 6.
-6. Build a separate looping Rive timeline sized to the reduced frames.
-7. Verify frame continuity, Rive structure, a local build, and sampled renders.
-8. Keep source files unchanged and return paths and measured results for every video.
+6. Generate and process every whole-second and end-of-media return sequence.
+7. Build one combined Rive multi-action project sized to the reduced frames.
+8. Verify frame continuity, Rive structure, a local build, and sampled renders.
+9. Keep source files unchanged and return paths and measured results for every video.
 
 If a batch item fails, continue with independent items and summarize failures at the end. Ask the user only for conditions listed in `SKILL.md`; otherwise use these defaults.
 
@@ -28,6 +29,7 @@ If a batch item fails, continue with independent items and summarize failures at
 - A short video of one subject on a simple, mostly uniform background.
 - An existing numbered sequence of transparent PNG frames.
 - A Rive timeline that should play the frames in order and loop.
+- Multiple source actions that share one Rive scene and can be selected after an interruption.
 - Deliverables that must reduce raster and `.riv` size while retaining transparency.
 
 Use a different matte method for footage with moving backgrounds, translucent objects, heavy motion blur, fine hair, or semitransparent effects. Use vector rigging or mesh deformation instead of frame playback when the animation must be edited as articulated parts.
@@ -62,8 +64,8 @@ Use a different matte method for footage with moving backgrounds, translucent ob
 | RGBA PNG frames | Gap-free numbering, original aspect ratio, transparent background |
 | Resized PNG frames | Same count and ordering; dimensions are an integer scale or explicit size |
 | WebP frames | Same count, order, dimensions, and alpha range as resized PNG frames |
-| `scene.rml` | Root-level image assets, one Solo, one image child per frame, one linear animation |
-| Timeline | FPS requested by the user; frame `i` is visible at animation frame `i` |
+| `scene.rml` | Root-level image assets, one shared Solo, one image child per frame, action segments, returns, and routing states |
+| Timeline | Source FPS preserved in action segments; each fixed one-second return retains all generated frames |
 | `.riv` | Self-contained build with all referenced images embedded |
 
 ## Execution procedure
@@ -104,7 +106,7 @@ Do not assume the model is installed. Check model availability first and ask bef
 
 Use `--width` and `--height` when an exact output size matters. Use `--scale` when proportional reduction is sufficient. Validate dimensions and alpha before proceeding.
 
-### 4. Generate the Rive timeline
+### 4. Generate the combined Rive project
 
 Create a normal Rive CLI project:
 
@@ -112,15 +114,18 @@ Create a normal Rive CLI project:
 rive create project
 ```
 
-Run `scripts/build_rive_timeline.py`. The generator derives width and height from the first frame, validates that every frame matches, and emits:
+Write the multi-action manifest described in `interruptible-multi-action.md`, then run `scripts/build_rive_multi_action.py`. The generator validates frame numbering and dimensions and emits:
 
 - root-level `ImageAsset` elements;
 - one `Solo` centered in the artboard;
 - one `Image` child per frame at local `(0, 0)` with centered origin;
 - `KeyFrameId` keys for `Solo.activeComponentId` at property key `296`;
-- a state machine that starts the linear animation.
+- forward action segments, one return animation per cut point, and one-frame Router animations.
+- a state machine with `interruptRequested` and `nextAction` view-model properties.
 
-For `N` numbered frames `0..N-1`, the animation uses `duration="N-1"`. At frame `i`, the active child is the `Image` with component ID `0:{2000+i}`.
+For `N` numbered frames `0..N-1`, an animation containing all of them uses `duration="N-1"`. Each `KeyFrameId` points at the corresponding child `Image` component.
+
+`scripts/build_rive_timeline.py` remains available for an explicitly requested basic looping timeline without interruption or action routing.
 
 ### 5. Verify and build
 
@@ -132,12 +137,11 @@ rive inspect project --summary
 rive project --once
 ```
 
-Expected invariants for 141 frames:
+Expected invariants:
 
-- `Image`: 141;
-- `ImageAsset`: 141;
-- `KeyFrameId`: 141;
-- `Solo`, `LinearAnimation`, and `StateMachine`: 1 each;
+- `Image` and `ImageAsset` counts match the embedded source and return frames; `KeyFrameId` adds one held reference for each Router animation;
+- one shared `Solo` and one `StateMachine`;
+- one `LinearAnimation` per source segment, return clip, and Router;
 - zero errors and zero warnings;
 - `.riv` size is plausible for the compressed embedded images.
 
@@ -173,7 +177,7 @@ The CLI docs allow `file=` outside the project directory, but external file chan
 
 ### Frame timing
 
-Reference keyframes must use `hold`. The generated animation is one frame per keyframe and loops by default. Preserve all frames unless the user explicitly requests temporal sampling; dropping frames changes motion timing and is not equivalent to reducing pixel size.
+Reference keyframes must use `hold`. Preserve all frames unless the user explicitly requests temporal sampling; dropping frames changes motion timing and is not equivalent to reducing pixel size. In the combined project, action segments and returns are one-shot animations joined by the state machine.
 
 ## Visual validation notes
 
@@ -207,6 +211,8 @@ The final `.riv` was about 92% smaller than the earlier PNG-based build. Actual 
 - Missing frames: validate continuous numeric suffixes before building.
 - Sudden motion or shortened duration: frame sampling changed the sequence; pixel reduction alone should not change frame count.
 - Large `.riv`: confirm the project references compressed WebP rather than oversized PNG files.
+- Interrupt request lost before the boundary: use a Boolean latch and a conditioned `100%` exit, not a fire-once Trigger.
+- Return freezes or action switching fails: verify the unconditional return-to-Router transition and the Router's immediate `nextAction` routes.
 - Clean verify but wrong appearance: verify is structural. Render and compare frames.
 
 ## Privacy and delivery
