@@ -28,13 +28,17 @@ For every boundary:
 
 1. Save the exact RGB source boundary frame as `inputs/first_frame.png`.
 2. Save exact source frame `0` as `inputs/last_frame.png`.
-3. Ask Seedance for a continuous four-second first-frame to last-frame transition. Keep the same subject, identity, style, scene, lighting, camera, framing, and background; use no cuts or camera movement.
-4. Retain every decoded generated frame.
-5. Replace generated frame `0` with `first_frame.png` and generated frame `N-1` with `last_frame.png`.
-6. Run the same matte, downscale, PNG, and WebP stages as source frames.
-7. Play the processed sequence as exactly `1s` using `playbackFps = processedFrameCount - 1` and animation duration `processedFrameCount - 1`.
+3. ModelArk `flf2v` rejects `duration: 1` and `duration: 3`. Use the verified `duration: 4` request and require the full first-frame to last-frame transition to finish during the first second, with the last pose held unchanged afterward. Keep the same subject, identity, body proportions, style, scene, lighting, fixed camera, fixed framing, and background; use no cuts, zoom, scale change, crop, reframe, or camera movement.
+4. Require the subject's overall visual size, limb scale, vertical anchor, and screen position to remain consistent with both endpoint frames. Only pose and return motion may change.
+5. Keep the provider response as `return_seedance_raw.mp4`, then retain only its first second as `return_1s.mp4`. Do not play the full four seconds or speed up the full clip.
+6. Decode the retained clip and reject it when its duration is outside `1s +/- 0.25s`, the subject becomes visibly larger or smaller, or the framing drifts. Retry at most twice with the same request. The strict prompt is necessary but does not guarantee scale stability.
+7. Retain every decoded frame from the retained one-second clip.
+8. Replace generated frame `0` with `first_frame.png` and generated frame `N-1` with `last_frame.png`.
+9. Run the same matte, downscale, PNG, and WebP stages as source frames.
+10. Estimate interior-frame scale against both exact endpoints. If rejected drift remains after the retries, run `scripts/stabilize_return_scale.py` and use `processed_stabilized/frames_50_webp` in the manifest. Keep frames `0` and `N-1` exact and report the fallback.
+11. Play the processed sequence as exactly `1s` using `playbackFps = processedFrameCount - 1` and animation duration `processedFrameCount - 1`.
 
-Use `--blend-frames 0`. Cross-fades are unsuitable for the verified one-second return because they produce visible double exposure. Seedance supplies only the motion between the endpoints; it is not expected to reproduce those endpoints pixel-for-pixel.
+Use `--blend-frames 0`. Cross-fades are unsuitable for the verified one-second return because they produce visible double exposure. Seedance supplies only the motion between the endpoints; it is not expected to reproduce those endpoints pixel-for-pixel. Endpoint replacement does not compensate for scale drift in the generated interior frames.
 
 The generation helper accepts `ARK_API_KEY` or `SEEDANCE_API_KEY_ID` plus `SEEDANCE_API_KEY_SECRET`. Keep the local environment file unreadable by group or world, and never place its contents in a manifest, log, screenshot, Skill, or Git commit.
 
@@ -58,12 +62,12 @@ All action frame directories must contain continuous numeric suffixes from `0`, 
         {
           "label": "1000ms",
           "boundaryFrame": 24,
-          "framesDir": "a_seedance_returns/return_1000ms/processed/frames_50_webp"
+          "framesDir": "a_seedance_returns/return_1000ms/processed/processed_stabilized/frames_50_webp"
         },
         {
           "label": "end",
           "boundaryFrame": 106,
-          "framesDir": "a_seedance_returns/return_end/processed/frames_50_webp"
+          "framesDir": "a_seedance_returns/return_end/processed/processed_stabilized/frames_50_webp"
         }
       ]
     },
@@ -75,7 +79,7 @@ All action frame directories must contain continuous numeric suffixes from `0`, 
         {
           "label": "1000ms",
           "boundaryFrame": 30,
-          "framesDir": "b_seedance_returns/return_1000ms/processed/frames_50_webp"
+          "framesDir": "b_seedance_returns/return_1000ms/processed/processed_stabilized/frames_50_webp"
         }
       ]
     }
@@ -174,12 +178,14 @@ Also verify:
 2. A second click during a return does not cause another return after routing.
 3. With multiple actions, `--data=nextAction=1` routes to action `1` after the return and its screenshots match that action rather than action `0`.
 4. Every return first and last frame matches the corresponding exact source endpoint.
-5. The contact sheet shows no blank frame, wrong-size asset, or discontinuous pose at the source-to-return boundary.
+5. The contact sheet shows no blank frame, wrong-size asset, enlarged or shrunken subject, framing drift, or discontinuous pose at the source-to-return boundary.
 
 ## Common failures
 
 - `InvalidAccessKey` or `InvalidEndpointOrModel.NotFound`: confirm the credentials are for Volcengine ModelArk and the account can access the configured model. Do not retry by copying credentials into commands or files.
+- Polling stops with a network EOF after `task.json` exists: run `status` and then `download` with the saved `--video`, `--output-root`, and `--boundary-frame`; do not submit a duplicate task.
 - Generated endpoints differ: expected; replace both endpoints with exact source frames.
+- Subject enlarges or shrinks during a return: the generated interior frames changed subject scale or framing. Reject and retry with `duration: 4`, the strict fixed-camera prompt, and a first-second completion requirement. If the drift persists after two retries, normalize interior-frame scale with the provided script and report the fallback; do not speed up the full provider clip or change exact endpoints.
 - Return starts early after a click: a duplicate animation state restarted segment time. Keep the original segment active and use a Boolean condition at its `100%` exit.
 - Return freezes on its endpoint: a conditional route fired from the return state. Insert the unconditional Router state.
 - The action unexpectedly returns after every cycle: `interruptRequested` was not cleared by transition actions.

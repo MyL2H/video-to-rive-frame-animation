@@ -65,7 +65,8 @@ Use a different matte method for footage with moving backgrounds, translucent ob
 | Resized PNG frames | Same count and ordering; dimensions are an integer scale or explicit size |
 | WebP frames | Same count, order, dimensions, and alpha range as resized PNG frames |
 | `scene.rml` | Root-level image assets, one shared Solo, one image child per frame, action segments, returns, and routing states |
-| Timeline | Source FPS preserved in action segments; each fixed one-second return retains all generated frames |
+| Timeline | Source FPS preserved in action segments; each return retains every frame from the generated first-second segment and is played for exactly one second |
+| Return scale | Measured against exact endpoints; rejected retries are normalized only in interior frames and the fallback is reported |
 | `.riv` | Self-contained build with all referenced images embedded |
 
 ## Execution procedure
@@ -209,6 +210,7 @@ The final `.riv` was about 92% smaller than the earlier PNG-based build. Actual 
 - No animation or frozen appearance: verify `propertyKey="296"` and `KeyFrameId`, not numeric keyframes.
 - Wrong colors after export: do not save RGBA arrays as BGR/BGRA through OpenCV; use Pillow or explicit channel conversion.
 - Missing frames: validate continuous numeric suffixes before building.
+- Enlarged or shrunken subject during a return: reject the retained first-second clip and regenerate with `duration: 4`, strict fixed scale and framing, and a first-second completion requirement. If two retries still drift, use `scripts/stabilize_return_scale.py` on interior frames and report the fallback; never change endpoints or rescale silently.
 - Sudden motion or shortened duration: frame sampling changed the sequence; pixel reduction alone should not change frame count.
 - Large `.riv`: confirm the project references compressed WebP rather than oversized PNG files.
 - Interrupt request lost before the boundary: use a Boolean latch and a conditioned `100%` exit, not a fire-once Trigger.

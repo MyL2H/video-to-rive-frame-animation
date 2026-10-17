@@ -15,8 +15,10 @@ That single request is sufficient. Each video becomes one logical action in one 
 - Preserve source FPS and extract every frame.
 - Remove backgrounds and write transparent PNG frames.
 - Resize to 50% and create optimized PNG and RGBA WebP frames.
-- Generate return motion for every whole-second cut point and the decoded end.
+- Generate a provider response whose complete return motion finishes in its first second, then retain only that second for every whole-second cut point and the decoded end.
 - Use exact source boundary and first frames as the fixed one-second return endpoints.
+- Require Seedance to preserve subject scale, body proportions, vertical anchor, and framing throughout the generated return.
+- Measure return-frame scale against exact endpoints, retry rejected generations, and normalize only interior frames when the provider still drifts.
 - Build a Rive state machine with delayed interruption and action routing.
 - Verify the project structure, local build, frame matching, and pointer-driven behavior.
 

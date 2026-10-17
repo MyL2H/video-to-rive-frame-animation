@@ -25,8 +25,12 @@ Do not ask for dimensions, quality, FPS, frame count, return duration, cut point
 - Write optimized transparent PNG and RGBA WebP frames with quality `82` and compression method `6`.
 - Define cut points at every whole second before the end, plus one final cut point at the decoded end frame.
 - For every action and cut point, generate a return clip from that exact boundary frame to source frame `0`.
-- Generate return motion with Seedance, but replace the generated endpoints with the exact source frames. Do not cross-fade the endpoints for a one-second return.
-- Retain every generated return frame and play the return as a fixed `1s` timeline.
+- ModelArk `flf2v` rejects `duration: 1` and `duration: 3`. Request Seedance with the verified `duration: 4`, require the complete return motion to finish during the first second and the last pose to hold afterward, then retain only the first second as `return_1s.mp4`. Do not speed up the full generated clip.
+- Use the strict scale and framing prompt built into `scripts/build_seedance_return_videos.py`.
+- Require the subject's overall size, body proportions, vertical anchor, and screen position to remain consistent with both endpoint frames. Reject and regenerate results that zoom, shrink, enlarge, crop, reframe, or drift.
+- Treat the strict Seedance prompt as necessary but not sufficient. Measure scale drift in every retained return. After two rejected retries, normalize only the interior frames with `scripts/stabilize_return_scale.py`; keep both endpoints exact and report that fallback.
+- Replace the generated endpoints with the exact source frames. Do not cross-fade the endpoints for a one-second return.
+- Retain every generated return frame and play the generated one-second sequence as a fixed `1s` timeline.
 - Build one Rive CLI project containing all logical actions, their forward segments, all return timelines, and the routing state machine.
 - Run structural checks, a local build, and sampled pointer-driven renders before reporting completion.
 - Preserve source files and put derived files in new directories.
@@ -79,12 +83,17 @@ Read credentials from a local environment file or process environment. Accept `A
      --boundary-frame <frame> run
 
    python scripts/process_seedance_return_frames.py \
-     --video <stem>_seedance_returns/return_<label>ms/return_4s.mp4 \
+     --video <stem>_seedance_returns/return_<label>ms/return_1s.mp4 \
      --first-frame <stem>_seedance_returns/return_<label>ms/inputs/first_frame.png \
      --last-frame <stem>_seedance_returns/return_<label>ms/inputs/last_frame.png \
      --output-dir <stem>_seedance_returns/return_<label>ms/processed \
      --blend-frames 0
+
+   python scripts/stabilize_return_scale.py \
+     --return-root <stem>_seedance_returns --replace
    ```
+
+   Before processing, run the same command with `--validate-only`. It rejects the retained clip unless its decoded duration is within `0.25s` of `1s`. Measure the retained first second against both endpoint frames and reject visible subject scale or framing drift. Retry at most twice with the same `duration: 4` request and strict first-second prompt. If drift remains, use the scale stabilization script for interior frames and report the fallback; never build from visibly enlarged frames and never alter the exact endpoints.
 
 5. Create one Rive CLI project, write a multi-action manifest, and build its RML:
 
@@ -110,7 +119,8 @@ Read [references/interruptible-multi-action.md](references/interruptible-multi-a
 
 - Let the source action's decoded duration define its end. Use all whole-second boundaries strictly before the end, then always append the end frame as the final boundary.
 - If an interruption is requested at time `t`, continue the current action to the smallest configured boundary at or after `t`. For example, a request at `3.2s` continues to `4.0s`.
-- Each return runs for exactly `1s`, regardless of the source FPS or Seedance clip length.
+- Seedance must complete each return during the generated clip's first second. Retain that second and exclude the held remainder from processing.
+- Each return runs for exactly `1s`, regardless of the source FPS.
 - The return's first frame is the exact source boundary frame and its last frame is exact source frame `0`.
 - After the return, enter the action selected by `nextAction`; use action `0` by default.
 - When switching from action A to action B, set `nextAction` to B's zero-based index before requesting the interruption.
@@ -140,12 +150,17 @@ For each input stem:
     inputs/                            exact source endpoint frames
     request.json                       sanitized generation request
     task.json, status.json             API task metadata with credentials redacted
-    return_4s.mp4                      generated return motion
+    return_seedance_raw.mp4            complete provider response, retained for audit
+    return_1s.mp4                      first-second return motion used by Rive
     processed/
       frames_rgba/                     transparent full-resolution return frames
       frames_50_png/                   optimized return PNG frames
       frames_50_webp/                  Rive return WebP frames
       manifest.json                    counts, size, timing, and endpoint policy
+      processed_stabilized/            measured scale-normalized derivatives
+        frames_50_png/                 stabilized PNG frames used when needed
+        frames_50_webp/                stabilized WebP frames referenced by Rive
+        manifest.json                  scale measurements and endpoint policy
 ```
 
 For all inputs together:
@@ -158,7 +173,7 @@ For all inputs together:
   build/<name>_multi_action_rive.riv   self-contained built Rive file
 ```
 
-The final report lists every source video and its dimensions, FPS, decoded frame count, cut points, return counts, PNG/WebP sizes, combined `.riv` path, and any visual-check exception.
+The final report lists every source video and its dimensions, FPS, decoded frame count, cut points, generated return durations, return counts, PNG/WebP sizes, combined `.riv` path, and any scale, framing, or visual-check exception.
 
 ## Example
 
@@ -166,6 +181,6 @@ The final report lists every source video and its dimensions, FPS, decoded frame
 使用 $video-to-rive-frame-animation 处理 E07_SMUG_00001_.mp4
 ```
 
-For a `512x768`, `24 FPS`, `107`-frame input, the verified profile creates cut points at frames `24`, `48`, `72`, `96`, and `106`; produces five `97`-frame return sequences; resizes frames to `256x384`; and builds one interruptible action. The internal boundaries are `1s`, `2s`, `3s`, and `4s`, followed by the decoded end label `4458ms`.
+For a `512x768`, `24 FPS`, `107`-frame input, the verified profile creates cut points at frames `24`, `48`, `72`, `96`, and `106`; produces five one-second return sequences; resizes frames to `256x384`; and builds one interruptible action. The internal boundaries are `1s`, `2s`, `3s`, and `4s`, followed by the decoded end label `4458ms`.
 
 Do not claim completion from `--verify` alone. Structural verification and rendered interaction checks are both required.

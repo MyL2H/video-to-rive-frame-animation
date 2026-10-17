@@ -27,6 +27,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--webp-method", type=int, default=6)
     parser.add_argument("--model", default="isnet-general-use")
     parser.add_argument("--provider", default="CPUExecutionProvider")
+    parser.add_argument("--expected-duration", type=float, default=1.0)
+    parser.add_argument("--duration-tolerance", type=float, default=0.25)
+    parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--replace", action="store_true")
     return parser.parse_args()
 
@@ -114,6 +117,23 @@ def main() -> None:
     generated, source_fps = read_video(args.video)
     first = load_rgb(args.first_frame)
     last = load_rgb(args.last_frame)
+    if args.expected_duration <= 0 or args.duration_tolerance < 0:
+        raise ValueError("Duration validation values must be non-negative")
+    generated_duration = len(generated) / source_fps
+    duration_delta = abs(generated_duration - args.expected_duration)
+    if duration_delta > args.duration_tolerance:
+        raise ValueError(
+            "Generated return duration "
+            f"{generated_duration:.3f}s is outside the accepted "
+            f"{args.expected_duration:.3f}s +/- {args.duration_tolerance:.3f}s"
+        )
+    if args.validate_only:
+        print(f"video={args.video}")
+        print(f"generated_duration={generated_duration:.3f}s")
+        print(f"generated_frames={len(generated)}")
+        print(f"source_fps={source_fps:.3f}")
+        print("validation=passed")
+        return
     aligned = align_endpoints(generated, first, last, args.blend_frames)
 
     for index, frame in enumerate(aligned):
@@ -146,6 +166,7 @@ def main() -> None:
     manifest = {
         "sourceVideo": str(args.video),
         "sourceGeneratedFps": source_fps,
+        "sourceGeneratedDurationSeconds": generated_duration,
         "generatedFrameCount": len(generated),
         "frameCount": len(aligned),
         "sourceSize": [first.shape[1], first.shape[0]],
@@ -153,6 +174,10 @@ def main() -> None:
         "blendFramesAtEachEnd": min(args.blend_frames, (len(aligned) - 1) // 2),
         "playbackFps": len(aligned) - 1,
         "playbackDurationSeconds": 1,
+        "durationPolicy": (
+            f"accepted {args.expected_duration:.3f}s +/- "
+            f"{args.duration_tolerance:.3f}s"
+        ),
         "endpointPolicy": (
             "exact source endpoint frames with crossfade into generated motion"
             if args.blend_frames > 0

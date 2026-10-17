@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate first-frame to last-frame return clips with Volcengine Ark."""
+"""Generate one-second first-frame to last-frame return clips with Volcengine Ark."""
 
 from __future__ import annotations
 
@@ -21,15 +21,27 @@ from PIL import Image
 
 DEFAULT_BASE = "https://ark.cn-beijing.volces.com/api/v3"
 DEFAULT_MODEL = "doubao-seedance-2-5-260628"
+SEEDANCE_REQUEST_DURATION_SECONDS = 4
+RETURN_DURATION_SECONDS = 1
 DEFAULT_RETURN_PROMPT = (
-    "Create one continuous four-second transition from the supplied first frame "
-    "to the supplied last frame. Keep the same subject, identity, clothing, art or "
-    "photographic style, scene, lighting, camera angle, framing, and background "
-    "exactly consistent. Begin at the first image and perform a natural, smooth, "
-    "physically coherent return motion toward the final pose. End at the supplied "
-    "last image. Use one continuous shot with no cuts, zoom, camera movement, "
-    "morphing, extra objects, text, watermark, or background change. Preserve "
-    "detail, line work, and colors throughout."
+    "CRITICAL SCALE LOCK: the two supplied endpoint images define the exact subject "
+    "scale. Match their head height, torso width, silhouette height, body proportions, "
+    "and feet anchor on every output frame. Pose may change, but the character's "
+    "dimensions must not change. If the motion approaches an edge, adjust the pose "
+    "inside the frame; never zoom out, scale down, scale up, crop, or reframe. "
+    "Create a continuous transition from the supplied first frame to the supplied "
+    "last frame. Complete the entire transition during the first second of the "
+    "output: start at the first image at 0 seconds and reach the last image at 1 "
+    "second. After 1 second, hold the last image unchanged for the remaining output. "
+    "Keep the subject's identity, body proportions, clothing, art or "
+    "photographic style, colors, scene, lighting, and background exactly consistent. "
+    "Keep the subject's overall visual size, limb scale, vertical anchor, and screen "
+    "position consistent with both endpoint images at every frame. The subject must "
+    "not become larger or smaller during the transition. Use a fixed camera and fixed "
+    "framing: no zoom, scale change, crop, reframe, pan, tilt, camera movement, "
+    "morphing, added or removed objects, text, watermark, cut, or background change. "
+    "Only the pose and return motion may change. Make the first-second motion natural, "
+    "smooth, physically coherent, and fully resolved at exactly 1 second."
 )
 
 
@@ -162,6 +174,42 @@ def write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def trim_video(source: Path, output: Path, duration_seconds: float) -> int:
+    capture = cv2.VideoCapture(str(source))
+    if not capture.isOpened():
+        raise ValueError(f"OpenCV could not open generated video: {source}")
+    fps = float(capture.get(cv2.CAP_PROP_FPS))
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if fps <= 0 or width <= 0 or height <= 0:
+        capture.release()
+        raise ValueError(f"Invalid generated video metadata: {source}")
+
+    frame_limit = max(4, round(fps * duration_seconds))
+    writer = cv2.VideoWriter(
+        str(output),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (width, height),
+    )
+    if not writer.isOpened():
+        capture.release()
+        raise ValueError(f"Could not open video writer: {output}")
+
+    written = 0
+    while written < frame_limit:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        writer.write(frame)
+        written += 1
+    capture.release()
+    writer.release()
+    if written < 4:
+        raise ValueError(f"Generated video has too few frames: {source}")
+    return written
+
+
 def prepare(args: argparse.Namespace) -> Path:
     boundary_dir = args.boundary_dir(args.output_root)
     inputs = boundary_dir / "inputs"
@@ -198,7 +246,7 @@ def prepare(args: argparse.Namespace) -> Path:
                 "image_url": {"url": image_data_url(last_path)},
             },
         ],
-        "duration": 4,
+        "duration": SEEDANCE_REQUEST_DURATION_SECONDS,
         "ratio": "adaptive",
         "generate_audio": False,
         "watermark": False,
@@ -216,8 +264,12 @@ def prepare(args: argparse.Namespace) -> Path:
             "boundaryFrame": args.boundary_frame,
             "boundaryFrameMs": round(args.boundary_frame * 1000 / fps),
             "boundaryLabelMs": boundary_label(args.boundary_frame, fps, frame_count),
-            "returnDurationSeconds": 1,
-            "seedanceDurationSeconds": 4,
+            "returnDurationSeconds": RETURN_DURATION_SECONDS,
+            "seedanceDurationSeconds": SEEDANCE_REQUEST_DURATION_SECONDS,
+            "retainedReturnDurationSeconds": RETURN_DURATION_SECONDS,
+            "retentionPolicy": (
+                "complete return motion in the first second; retain only that second"
+            ),
         },
     )
     return request_path
@@ -288,9 +340,12 @@ def download(args: argparse.Namespace) -> None:
     video_url = find_video_url(response)
     if not video_url:
         raise RuntimeError(f"Completed task response has no video URL: {response}")
-    output = boundary_dir / "return_4s.mp4"
+    raw_output = boundary_dir / "return_seedance_raw.mp4"
+    output = boundary_dir / "return_1s.mp4"
     with urllib.request.urlopen(video_url, timeout=args.timeout) as remote:
-        output.write_bytes(remote.read())
+        raw_output.write_bytes(remote.read())
+    trim_video(raw_output, output, RETURN_DURATION_SECONDS)
+    print(f"raw_video={raw_output}")
     print(f"video={output}")
 
 
