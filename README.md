@@ -13,7 +13,7 @@ That single request is sufficient. Each video becomes one logical action in one 
 ## Default workflow
 
 - Sample source motion to exactly 12 FPS while preserving playback speed and the decoded end frame.
-- Save complete RGB PNG frames first, then create transparent PNG frames. For the current uniform background, remove only `RGB 232..238` regions connected to an image border, keep complete subject components, and use `rembg` for edge feathering and hole repair.
+- Save complete RGB PNG frames first, then create transparent PNG frames. For the uniform background, remove only inclusive per-channel `RGB 230..241` regions connected to an image border, keep complete subject components, and use `rembg` for edge feathering and hole repair.
 - Resize to 50% with Lanczos, repair any resampling holes, and create optimized PNG and RGBA WebP frames.
 - Generate exactly 12 ordered Seedream return images for every whole-second cut point and the decoded end.
 - Replace return frames `0` and `11` with the exact source RGBA boundary and first frames.

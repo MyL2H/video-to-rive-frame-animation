@@ -11,8 +11,8 @@ import numpy as np
 from PIL import Image
 
 
-DEFAULT_BACKGROUND_MIN = 232
-DEFAULT_BACKGROUND_MAX = 238
+DEFAULT_BACKGROUND_MIN = 230
+DEFAULT_BACKGROUND_MAX = 241
 
 
 def outer_background_mask(

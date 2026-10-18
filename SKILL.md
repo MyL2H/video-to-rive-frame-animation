@@ -22,7 +22,7 @@ Do not ask for dimensions, quality, FPS, frame count, return duration, cut point
 - Play every source and return timeline at exactly `12 FPS`.
 - For a 24 FPS source, retain every second decoded frame so the original motion speed is preserved. Always retain decoded source frame `N-1`, even when it is not on the regular sample grid.
 - Save every retained frame as a complete RGB PNG before matting, then write full-resolution transparent PNG frames. Never derive the matte directly from an in-memory video frame when the source background is a measurable uniform color range.
-- For a uniform source background, pass its measured inclusive RGB range to `--background-min` and `--background-max` (`232..238` for the current E03/E06 assets). Save every decoded or generated RGB PNG before matting. Remove the union of border-connected `rembg` background and border-connected pixels in the measured RGB range. Keep complete subject components, use `rembg` only for a small edge feather, close tiny mask gaps, and fill enclosed transparent holes. Do not delete every pixel in the RGB range globally; matching colors can occur inside the subject.
+- For a uniform source background, use the inclusive per-channel RGB range `230..241` (`230 <= R/G/B <= 241`) as `--background-min 230 --background-max 241`. Save every decoded or generated RGB PNG before matting. Remove the union of border-connected `rembg` background and border-connected pixels in this RGB range. Keep complete subject components, use `rembg` only for a small edge feather, close tiny mask gaps, and fill enclosed transparent holes. Do not delete every pixel in the RGB range globally; matching colors can occur inside the subject.
 - Resize proportionally to `50%`, using Lanczos and nearest integer pixel dimensions.
 - Write optimized transparent PNG and RGBA WebP frames with quality `82` and compression method `6`.
 - Define cut points at every whole second before the end, plus the decoded end frame. Map each source cut to its corresponding 12 FPS timeline frame.
@@ -69,10 +69,10 @@ Read credentials from a local environment file or process environment. Accept `A
    python scripts/extract_remove_background.py \
      --video input.mp4 --output <stem>_frames_12fps \
      --rgb-output <stem>_frames_12fps_rgb --target-fps 12 \
-     --background-min 232 --background-max 238
+     --background-min 230 --background-max 241
    ```
 
-   The extraction manifest records every retained RGB frame, its exact source frame, the measured background range, and matte diagnostics. Verify the end frame is present. Inspect the RGB and RGBA results as contact sheets; a zero-hole metric alone does not detect opaque background residue. To re-matte an existing RGB PNG directory without decoding the video again, use `scripts/remove_background.py --source <rgb-dir> --output <rgba-dir> --background-min 232 --background-max 238`.
+   The extraction manifest records every retained RGB frame, its exact source frame, the configured background range, and matte diagnostics. Verify the end frame is present. Inspect the RGB and RGBA results as contact sheets; a zero-hole metric alone does not detect opaque background residue. To re-matte an existing RGB PNG directory without decoding the video again, use `scripts/remove_background.py --source <rgb-dir> --output <rgba-dir> --background-min 230 --background-max 241`.
 
 3. Create half-resolution PNG and WebP derivatives without changing the transparent source frames:
 
