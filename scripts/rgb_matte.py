@@ -52,6 +52,31 @@ def fill_enclosed_transparent(alpha: np.ndarray, threshold: int = 8) -> np.ndarr
     return result
 
 
+def border_connected(mask: np.ndarray) -> np.ndarray:
+    """Return only true components that touch an image border."""
+    values = mask.astype(np.uint8)
+    count, labels = cv2.connectedComponents(values, connectivity=8)
+    border_labels = set(labels[0, :]) | set(labels[-1, :])
+    border_labels |= set(labels[:, 0]) | set(labels[:, -1])
+    border_labels.discard(0)
+    return np.isin(labels, list(border_labels))
+
+
+def fill_enclosed_mask(mask: np.ndarray) -> np.ndarray:
+    """Fill false components that do not touch an image border."""
+    result = mask.astype(bool).copy()
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (~result).astype(np.uint8), 8
+    )
+    height, width = result.shape
+    for label in range(1, count):
+        x, y, w, h, _ = stats[label]
+        touches_border = x == 0 or y == 0 or x + w == width or y + h == height
+        if not touches_border:
+            result[labels == label] = True
+    return result
+
+
 def matte_rgb_frame(
     rgb: np.ndarray,
     rembg_rgba: np.ndarray,
@@ -59,10 +84,12 @@ def matte_rgb_frame(
     background_max: int = DEFAULT_BACKGROUND_MAX,
     edge_pixels: int = 2,
 ) -> tuple[np.ndarray, dict[str, int | float]]:
-    """Combine a strict outer color key with rembg edge feathering.
+    """Combine outer background evidence with rembg edge feathering.
 
-    The largest non-background components are kept as subject content. This
-    protects light subject pixels that happen to match the background range.
+    The saved RGB PNG remains complete. Only border-connected rembg background
+    and border-connected pixels in the configured RGB range become transparent.
+    This protects light or dark subject pixels that overlap either background
+    signal and fills rembg holes enclosed by complete subject components.
     """
     if rgb.ndim != 3 or rgb.shape[2] != 3:
         raise ValueError("rgb must have shape (height, width, 3)")
@@ -71,9 +98,20 @@ def matte_rgb_frame(
     if edge_pixels < 0:
         raise ValueError("edge_pixels must be non-negative")
 
-    outer, background_info = outer_background_mask(
+    outer_color, background_info = outer_background_mask(
         rgb, background_min, background_max
     )
+
+    # rembg can make enclosed holes inside a light subject. Close tiny gaps and
+    # fill those holes before using its mask as evidence for outside background.
+    rembg_subject = rembg_rgba[:, :, 3] >= 128
+    rembg_subject = cv2.morphologyEx(
+        rembg_subject.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)
+    ).astype(bool)
+    rembg_subject = fill_enclosed_mask(rembg_subject)
+    outer_rembg = border_connected(~rembg_subject)
+
+    outer = outer_color | outer_rembg
     foreground = (~outer).astype(np.uint8)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, 8)
     if count <= 1:
@@ -115,6 +153,8 @@ def matte_rgb_frame(
 
     return rgba, {
         **background_info,
+        "outerRembgBackgroundPixels": int(outer_rembg.sum()),
+        "outerCombinedBackgroundPixels": int(outer.sum()),
         "keptForegroundComponents": len(keep_labels),
         "largestForegroundPixels": largest_area,
         "minimumKeptForegroundPixels": min_keep_area,
@@ -158,7 +198,10 @@ def matte_directory(
         "source": str(source),
         "output": str(output),
         "frameCount": len(files),
-        "mattingPolicy": "strict border-connected RGB range plus rembg edge feather",
+        "mattingPolicy": (
+            "complete RGB PNG first; border-connected rembg background and RGB range; "
+            "rembg edge feather"
+        ),
         "backgroundRange": [background_min, background_max],
         "edgePixels": edge_pixels,
         "holePolicy": "fill enclosed transparent components",

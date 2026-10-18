@@ -118,7 +118,10 @@ def main() -> None:
         "outputFrameCount": output_index,
         "rgbOutput": str(rgb_output),
         "rgbOutputFrameCount": output_index,
-        "mattingPolicy": "save complete RGB PNG first; strict border-connected RGB range plus rembg edge feather",
+        "mattingPolicy": (
+            "complete RGB PNG first; border-connected rembg background and RGB range; "
+            "rembg edge feather"
+        ),
         "backgroundRange": [args.background_min, args.background_max],
         "edgePixels": args.edge_pixels,
         "holePolicy": "fill enclosed transparent components",

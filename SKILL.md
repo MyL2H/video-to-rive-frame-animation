@@ -22,7 +22,7 @@ Do not ask for dimensions, quality, FPS, frame count, return duration, cut point
 - Play every source and return timeline at exactly `12 FPS`.
 - For a 24 FPS source, retain every second decoded frame so the original motion speed is preserved. Always retain decoded source frame `N-1`, even when it is not on the regular sample grid.
 - Save every retained frame as a complete RGB PNG before matting, then write full-resolution transparent PNG frames. Never derive the matte directly from an in-memory video frame when the source background is a measurable uniform color range.
-- For a uniform source background, pass its measured inclusive RGB range to `--background-min` and `--background-max` (`232..238` for the current E03/E06 assets). Remove only background-colored components connected to an image border, keep complete subject components, use `rembg` only for a small edge feather, and fill enclosed transparent holes. Do not delete every pixel in the RGB range globally; matching colors can occur inside the subject.
+- For a uniform source background, pass its measured inclusive RGB range to `--background-min` and `--background-max` (`232..238` for the current E03/E06 assets). Save every decoded or generated RGB PNG before matting. Remove the union of border-connected `rembg` background and border-connected pixels in the measured RGB range. Keep complete subject components, use `rembg` only for a small edge feather, close tiny mask gaps, and fill enclosed transparent holes. Do not delete every pixel in the RGB range globally; matching colors can occur inside the subject.
 - Resize proportionally to `50%`, using Lanczos and nearest integer pixel dimensions.
 - Write optimized transparent PNG and RGBA WebP frames with quality `82` and compression method `6`.
 - Define cut points at every whole second before the end, plus the decoded end frame. Map each source cut to its corresponding 12 FPS timeline frame.
@@ -72,7 +72,7 @@ Read credentials from a local environment file or process environment. Accept `A
      --background-min 232 --background-max 238
    ```
 
-   The extraction manifest records every retained RGB frame, its exact source frame, the measured background range, and matte diagnostics. Verify the end frame is present. To re-matte an existing RGB PNG directory without decoding the video again, use `scripts/remove_background.py --source <rgb-dir> --output <rgba-dir> --background-min 232 --background-max 238`.
+   The extraction manifest records every retained RGB frame, its exact source frame, the measured background range, and matte diagnostics. Verify the end frame is present. Inspect the RGB and RGBA results as contact sheets; a zero-hole metric alone does not detect opaque background residue. To re-matte an existing RGB PNG directory without decoding the video again, use `scripts/remove_background.py --source <rgb-dir> --output <rgba-dir> --background-min 232 --background-max 238`.
 
 3. Create half-resolution PNG and WebP derivatives without changing the transparent source frames:
 
@@ -84,6 +84,17 @@ Read credentials from a local environment file or process environment. Accept `A
      --scale 0.5 --webp-quality 82 --webp-method 6
    ```
 
+   Validate the full-resolution RGBA sequence and inspect its contact sheet:
+
+   ```bash
+   python scripts/validate_matte.py \
+     --frames-dir <stem>_frames_12fps \
+     --report <stem>_frames_12fps/matte_validation.json \
+     --contact-sheet <stem>_frames_12fps/matte_contact_sheet.jpg
+   ```
+
+   `validate_matte.py` fails on opaque frame edges or enclosed transparent holes. Its magenta contact sheet is still required because those metrics cannot identify every opaque background residue. Transparent background visible between separate limbs is valid.
+
 4. Calculate cut-point frames as specified in [references/interruptible-multi-action.md](references/interruptible-multi-action.md). Generate and process 12 return images for every cut point:
 
    ```bash
@@ -92,7 +103,7 @@ Read credentials from a local environment file or process environment. Accept `A
     --boundary-frame <source-frame> --target-fps 12 --size 1024x1536 run
    ```
 
-   Require exactly 12 generated images. Replace the endpoints with exact source frames, write the complete `frames_rgb` PNGs first, matte all 12 frames with the same border-connected RGB policy and hole repair, and write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same strict prompt. If drift remains, run:
+   Require exactly 12 generated images. Replace the endpoints with exact source frames, write the complete `frames_rgb` PNGs first, then matte all 12 saved PNGs using border-connected `rembg` background, the measured RGB range, and hole repair. Write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same strict prompt. If drift remains, run:
 
    ```bash
    python scripts/stabilize_return_scale.py \
@@ -121,7 +132,7 @@ Read credentials from a local environment file or process environment. Accept `A
 
 7. Render pointer-driven samples at interruption cut points, return midpoints, and return endpoints. Match the screenshots against expected source or return frames. Also test uninterrupted playback, a second interruption during a return, and a target-action switch when multiple actions are present.
 
-Read [references/interruptible-multi-action.md](references/interruptible-multi-action.md) before implementing the state machine and [references/verified-workflow.md](references/verified-workflow.md) before the first frame-processing run.
+Read [references/interruptible-multi-action.md](references/interruptible-multi-action.md) before implementing the state machine and [references/verified-workflow.md](references/verified-workflow.md) before the first frame-processing run. The verified workflow also records the RGB-PNG-first matte fix for generated return interiors.
 
 ## Interruption contract
 

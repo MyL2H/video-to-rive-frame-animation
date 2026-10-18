@@ -47,9 +47,9 @@ Run `scripts/extract_remove_background.py --target-fps 12 --rgb-output <stem>_fr
 - selects source frames at 12 FPS;
 - appends decoded source frame `N-1` when needed;
 - saves every retained source frame as a complete RGB PNG first;
-- runs `rembg` with `isnet-general-use` and CPU provider only to obtain edge alpha;
-- removes only the measured background range (`232..238` for the current E03/E06 assets) when it is connected to an image border;
-- keeps complete foreground components and fills enclosed transparent holes;
+- runs `rembg` with `isnet-general-use` and CPU provider to identify outside background and edge alpha;
+- removes the union of border-connected `rembg` background and border-connected pixels in the measured range (`232..238` for the current E03/E06 assets);
+- closes tiny segmentation gaps, keeps complete foreground components, and fills enclosed transparent holes;
 - disables rembg alpha matting for predictable runtime behavior;
 - writes RGBA PNGs with Pillow;
 - writes `extraction_manifest.json` with output-to-source frame mappings.
@@ -61,7 +61,9 @@ Expected counts for the current 24 FPS examples:
 | E03: 141 frames | 71 | `24,48,72,96,120,140` | `12,24,36,48,60,70` |
 | E06: 90 frames | 46 | `24,48,72,89` | `12,24,36,45` |
 
-Do not use a global RGB threshold as the final alpha. The source subject can contain pixels in the same `232..238` range as the background. The border-connected mask plus foreground-component retention is the required protection against interior holes. The complete RGB directory is an auditable intermediate and must remain beside the transparent output.
+Do not use a global RGB threshold as the final alpha. The source subject can contain pixels in the same `232..238` range as the background, and generated return interiors can shift away from that range. The union of border-connected `rembg` and color evidence plus foreground-component retention is the required protection against interior holes. The complete RGB directory is an auditable intermediate and must remain beside the transparent output.
+
+Run `scripts/validate_matte.py` on each final RGBA sequence. Its zero-hole and transparent-edge metrics do not detect opaque background residue, so also inspect its magenta contact sheet. A valid frame can still have transparent background between limbs; treat that as background, not as a missing-content defect.
 
 ### 3. Downscale and compress
 

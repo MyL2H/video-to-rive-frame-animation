@@ -475,7 +475,10 @@ def process(args: argparse.Namespace) -> Path:
             "returnDurationFrames": RETURN_FRAME_COUNT,
             "returnDurationSeconds": 1,
             "endpointPolicy": endpoint_policy,
-            "mattingPolicy": "complete RGB PNG first; strict border-connected RGB range plus rembg edge feather",
+            "mattingPolicy": (
+                "complete RGB PNG first; border-connected rembg background and RGB range; "
+                "rembg edge feather"
+            ),
             "backgroundRange": [args.background_min, args.background_max],
             "edgePixels": args.edge_pixels,
             "holePolicy": "fill enclosed transparent components",
