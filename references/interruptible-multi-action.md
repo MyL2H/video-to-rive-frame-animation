@@ -1,46 +1,70 @@
-# Interruptible Multi-action Workflow
+# Interruptible 12 FPS Multi-action Workflow
 
-This reference defines the cut-point, return-clip, manifest, and state-machine contract used by the default profile. Read it before generating return clips or writing the Rive RML.
+This reference defines temporal sampling, cut points, Seedream return generation, manifests, and the state-machine contract for the 12 FPS profile.
+
+## Temporal sampling
+
+The Rive timeline target is exactly 12 FPS. Preserve source motion speed by sampling the source at 12 frames per second.
+
+For source FPS `S`, target FPS `T=12`, and `N` decoded frames:
+
+1. Select source indices `round(j * S / T)` for target frames `j=0,1,...` while the mapped index is below `N-1`.
+2. Always append source frame `N-1` when it is not already selected.
+3. Write output frames as continuous `0..M-1` and retain the source mapping in `extraction_manifest.json`.
+
+For a 24 FPS source this normally selects `0,2,4,...`; an odd final source frame is appended exactly.
+
+Examples:
+
+| Source | Retained source frames | 12 FPS count |
+|---|---|---:|
+| 141 frames at 24 FPS | `0,2,...,140` | 71 |
+| 90 frames at 24 FPS | `0,2,...,88,89` | 46 |
 
 ## Cut points
 
-For a decoded source with `N` frames at `F` FPS:
+Use all whole-second source boundaries strictly before the decoded end, then append source frame `N-1`.
 
-1. The final frame index is `N - 1`.
-2. For each whole second `k = 1, 2, ...`, compute `round(k * F)` while the result is less than `N - 1`.
-3. Append `N - 1` as the final boundary, even when it is not at a whole second.
-4. Remove duplicate frame indices.
+For each source boundary, use the matching output index from `extraction_manifest.json`. Internal labels use `round(sourceFrame * 1000 / sourceFps)`. The final label uses `round(N * 1000 / sourceFps)` to represent decoded media duration.
 
-Internal labels use `round(frame * 1000 / F)`. The final label uses `round(N * 1000 / F)` to represent the decoded media duration. The implementation must not infer `N` from filenames alone.
+Examples:
 
-Example:
-
-| Decoded source | Boundary frames | Labels |
-|---|---|---|
-| `107` frames at `24 FPS` | `24, 48, 72, 96, 106` | `1000ms, 2000ms, 3000ms, 4000ms, 4458ms` |
-| about `6.6s` at `24 FPS` | `24, 48, 72, 96, 120, 144, <end>` | `1s, 2s, 3s, 4s, 5s, 6s, <decoded end>` |
+| Source | Source cut frames | 12 FPS cut frames | Labels |
+|---|---|---|---|
+| 141 frames at 24 FPS | `24,48,72,96,120,140` | `12,24,36,48,60,70` | `1000ms,2000ms,3000ms,4000ms,5000ms,5875ms` |
+| 90 frames at 24 FPS | `24,48,72,89` | `12,24,36,45` | `1000ms,2000ms,3000ms,3750ms` |
 
 An interruption at `t` is handled at the first boundary greater than or equal to `t`. If `t` is exactly a boundary, that boundary is used.
 
-## Return clip generation
+## Seedream return generation
 
 For every boundary:
 
 1. Save the exact RGB source boundary frame as `inputs/first_frame.png`.
 2. Save exact source frame `0` as `inputs/last_frame.png`.
-3. ModelArk `flf2v` rejects `duration: 1` and `duration: 3`. Use the verified `duration: 4` request and require the full first-frame to last-frame transition to finish during the first second, with the last pose held unchanged afterward. Keep the same subject, identity, body proportions, style, scene, lighting, fixed camera, fixed framing, and background; use no cuts, zoom, scale change, crop, reframe, or camera movement.
-4. Require the subject's overall visual size, limb scale, vertical anchor, and screen position to remain consistent with both endpoint frames. Only pose and return motion may change.
-5. Keep the provider response as `return_seedance_raw.mp4`, then retain only its first second as `return_1s.mp4`. Do not play the full four seconds or speed up the full clip.
-6. Decode the retained clip and reject it when its duration is outside `1s +/- 0.25s`, the subject becomes visibly larger or smaller, or the framing drifts. Retry at most twice with the same request. The strict prompt is necessary but does not guarantee scale stability.
-7. Retain every decoded frame from the retained one-second clip.
-8. Replace generated frame `0` with `first_frame.png` and generated frame `N-1` with `last_frame.png`.
-9. Run the same matte, downscale, PNG, and WebP stages as source frames.
-10. Estimate interior-frame scale against both exact endpoints. If rejected drift remains after the retries, run `scripts/stabilize_return_scale.py` and use `processed_stabilized/frames_50_webp` in the manifest. Keep frames `0` and `N-1` exact and report the fallback.
-11. Play the processed sequence as exactly `1s` using `playbackFps = processedFrameCount - 1` and animation duration `processedFrameCount - 1`.
+3. Send one `doubao-seedream-5-0-pro-260628` request that returns exactly 12 separate ordered images. Use a canvas of at least `921600` pixels; for a `2:3` source use `1024x1536` and resize generated interiors back to the source dimensions.
+4. Require the complete natural return motion from the boundary pose to the first-frame pose across those 12 images.
+5. Preserve the subject's identity, face, clothing, body proportions, overall size, feet anchor, screen position, style, lighting, camera, framing, and background.
+6. Reject zoom, shrink, enlarge, crop, reframe, drift, morphing, object changes, text, watermark, and cuts.
+7. Replace generated frame `0` with `first_frame.png` and generated frame `11` with `last_frame.png`.
+8. Keep the 12 complete RGB PNG frames in `processed/frames_rgb`, run the same border-connected RGB matte and transparent-hole repair as source frames, then downscale and write PNG/WebP derivatives. Do not matte directly from generated in-memory pixels.
+9. Measure interior scale and framing against both exact endpoints. Retry at most twice. If rejected drift remains, run `scripts/stabilize_return_scale.py` on interior frames only and report the fallback.
 
-Use `--blend-frames 0`. Cross-fades are unsuitable for the verified one-second return because they produce visible double exposure. Seedance supplies only the motion between the endpoints; it is not expected to reproduce those endpoints pixel-for-pixel. Endpoint replacement does not compensate for scale drift in the generated interior frames.
+Seedream is an image model. Independent per-frame calls can drift and must be avoided when a single multi-image request or a single 4x3 storyboard is available. If the API can return only one image, request an ordered 4x3 storyboard with 12 equal 2:3 cells, using `1024x1152` so each cell is `256x384`; verify the grid and row-major ordering, then slice it into 12 images. Report that generation fallback.
 
-The generation helper accepts `ARK_API_KEY` or `SEEDANCE_API_KEY_ID` plus `SEEDANCE_API_KEY_SECRET`. Keep the local environment file unreadable by group or world, and never place its contents in a manifest, log, screenshot, Skill, or Git commit.
+If Seedream output safety rejects the storyboard after non-sensitive prompt mitigation, use `scripts/build_local_return_frames.py` to sample the exact source motion in reverse at 12 evenly spaced poses. Record `source_reverse_sampling` as an exception and preserve the same return timing and exact endpoints.
+
+## Return timing
+
+A return has 12 unique images:
+
+- `fps: 12`
+- `durationFrames: 12`
+- `durationSeconds: 1`
+- Image keys at Rive frames `0..11` with `hold` interpolation.
+- Repeat the last image's held key at Rive frame `12` so the final pose remains visible through the end of the second.
+
+This differs from the source-segment rule. Source segments use `duration=N-1` at their playback FPS; the one-second return must include the final-frame hold interval.
 
 ## Multi-action manifest
 
@@ -51,35 +75,23 @@ All action frame directories must contain continuous numeric suffixes from `0`, 
   "name": "Character Multi-action Playback",
   "artboardSize": [256, 384],
   "framePattern": "*.webp",
+  "returnFps": 12,
+  "returnDurationFrames": 12,
+  "returnDurationSeconds": 1,
   "defaultAction": 0,
   "inputs": ["a.mp4", "b.mp4"],
   "actions": [
     {
       "name": "Action A",
-      "fps": 24,
-      "framesDir": "a_frames_50_webp",
+      "fps": 12,
+      "framesDir": "a_frames_12fps_50_webp",
       "returns": [
         {
           "label": "1000ms",
-          "boundaryFrame": 24,
-          "framesDir": "a_seedance_returns/return_1000ms/processed/processed_stabilized/frames_50_webp"
-        },
-        {
-          "label": "end",
-          "boundaryFrame": 106,
-          "framesDir": "a_seedance_returns/return_end/processed/processed_stabilized/frames_50_webp"
-        }
-      ]
-    },
-    {
-      "name": "Action B",
-      "fps": 30,
-      "framesDir": "b_frames_50_webp",
-      "returns": [
-        {
-          "label": "1000ms",
-          "boundaryFrame": 30,
-          "framesDir": "b_seedance_returns/return_1000ms/processed/processed_stabilized/frames_50_webp"
+          "boundaryFrame": 12,
+          "fps": 12,
+          "durationFrames": 12,
+          "framesDir": "a_seedream_returns/return_1000ms/processed/frames_50_webp"
         }
       ]
     }
@@ -94,7 +106,6 @@ Return boundaries must increase and remain within the source action. The action 
 ```text
 Entry -> A segment 0 -> A segment 1 -> ... -> A segment 0
                |               |
-               | 100% when     | 100% when
                | interrupted   | interrupted
                v               v
           A return 0       A return 1
@@ -105,24 +116,22 @@ Entry -> A segment 0 -> A segment 1 -> ... -> A segment 0
                        +-- nextAction=1 --> B segment 0
 ```
 
-Each action is one logical timeline split at return boundaries. The segment order preserves every source frame and its FPS. The split exists only so a delayed conditioned exit can select the correct return at a whole second.
+Each action is one logical timeline split at return boundaries. The segment order preserves every retained 12 FPS source frame.
 
 ### Inputs
 
 - `interruptRequested`: `ViewModelPropertyBoolean`. Set it to `true` to request the delayed interruption.
 - `nextAction`: `ViewModelPropertyNumber`. Set it to the zero-based target action before setting `interruptRequested`.
 
-The click listener writes only `interruptRequested=true`. A host that switches actions must write `nextAction` first, then fire the interruption. For a plain interruption, leave `nextAction` at the current action or the configured default.
-
 ### Transitions
 
 - Each source segment has a conditioned `100%` exit to its matching return and an unconditional `100%` exit to the next source segment.
 - The conditioned transition reads `interruptRequested == true` and writes `false` as a transition action.
-- Each return has one unconditional `100%` exit to its Router and writes `interruptRequested=false` in that transition action.
+- Each return has one unconditional `100%` exit to its Router and writes `interruptRequested=false`.
 - Each Router has immediate, conditioned routes for every `nextAction` value. Router transitions also write `interruptRequested=false`.
 - Entry goes to action `defaultAction`, segment `0`.
 
-Do not use `ViewModelPropertyTrigger` for the delayed request. A trigger is spent at the end of the frame in which it fires, so it cannot remain true until a later `100%` exit. Do not route directly from a return with `nextAction` conditions: that allows an early route and freezes on the endpoint. The unconditional return-to-Router exit is required.
+Do not use `ViewModelPropertyTrigger` for the delayed request.
 
 ## RML invariants
 
@@ -130,9 +139,10 @@ Do not use `ViewModelPropertyTrigger` for the delayed request. A trigger is spen
 - Put every frame `Image` inside one shared `Solo`.
 - Key `Solo.activeComponentId` (`propertyKey="296"`) with `KeyFrameId` values pointing to child `Image` component IDs.
 - Use `interpolationType="hold"` for every image-reference key.
-- For `N` frames in an animation, use `duration="N-1"`; use the intended playback rate as `fps`.
-- Keep transitions between these one-shot frame animations at `duration="0"`.
-- Match the artboard and image dimensions unless scaling is intentional.
+- Source animation duration is `N-1` at 12 FPS.
+- Return animation duration is `12` at 12 FPS, with 12 unique images and a repeated final held key at frame `12`.
+- Keep transitions between frame animations at `duration="0"`.
+- Match artboard and image dimensions unless scaling is intentional.
 
 ## Verification
 
@@ -144,51 +154,22 @@ rive inspect project --summary
 rive project --once
 ```
 
-Then verify behavior with real pointer events. For a `3.2s` interruption on a `256x384` artboard:
-
-```bash
-rive project --screenshot=at_3500.png \
-  --advance=3200ms --pointer=click@128,192 --advance=300ms
-
-rive project --screenshot=at_4500.png \
-  --advance=3200ms --pointer=click@128,192 --advance=1300ms
-
-rive project --screenshot=at_5000.png \
-  --advance=3200ms --pointer=click@128,192 --advance=1800ms
-
-rive project --screenshot=at_5200.png \
-  --advance=3200ms --pointer=click@128,192 --advance=2000ms
-```
-
-Expected sequence:
-
-| Requested capture | Expected frame family |
-|---|---|
-| `3.5s` | source around frame `84` for `24 FPS` |
-| `4.0s` | boundary frame or the first few return frames |
-| `4.5s` | matching return midpoint, around half of its frame count |
-| `5.0s` | exact source frame `0` or the matching return endpoint |
-| `5.2s` | source action restarted near frame `5` |
-
-Headless screenshots may land one to three return frames late because startup and capture time are not exact. Composite transparent frames over the screenshot background and image-match the result against the complete candidate sequence; do not trust `--advance` alone.
+Then verify behavior with real pointer events. Sample interruption cut points, return frames at 0, 0.5, and 1 second, and restarted source frames. Image-match screenshots against complete candidate sequences because startup and capture time are not exact.
 
 Also verify:
 
 1. No-click captures continue through every forward segment and do not enter a return.
 2. A second click during a return does not cause another return after routing.
-3. With multiple actions, `--data=nextAction=1` routes to action `1` after the return and its screenshots match that action rather than action `0`.
-4. Every return first and last frame matches the corresponding exact source endpoint.
+3. With multiple actions, setting `nextAction=1` routes to action `1` after the return.
+4. Every return first and last frame matches the exact source endpoint.
 5. The contact sheet shows no blank frame, wrong-size asset, enlarged or shrunken subject, framing drift, or discontinuous pose at the source-to-return boundary.
 
 ## Common failures
 
-- `InvalidAccessKey` or `InvalidEndpointOrModel.NotFound`: confirm the credentials are for Volcengine ModelArk and the account can access the configured model. Do not retry by copying credentials into commands or files.
-- Polling stops with a network EOF after `task.json` exists: run `status` and then `download` with the saved `--video`, `--output-root`, and `--boundary-frame`; do not submit a duplicate task.
-- Generated endpoints differ: expected; replace both endpoints with exact source frames.
-- Subject enlarges or shrinks during a return: the generated interior frames changed subject scale or framing. Reject and retry with `duration: 4`, the strict fixed-camera prompt, and a first-second completion requirement. If the drift persists after two retries, normalize interior-frame scale with the provided script and report the fallback; do not speed up the full provider clip or change exact endpoints.
-- Return starts early after a click: a duplicate animation state restarted segment time. Keep the original segment active and use a Boolean condition at its `100%` exit.
-- Return freezes on its endpoint: a conditional route fired from the return state. Insert the unconditional Router state.
-- The action unexpectedly returns after every cycle: `interruptRequested` was not cleared by transition actions.
-- A second click during a return leaks into the next action: add the clear action to both the return exit and Router exit.
+- `ModelNotOpen`: activate `doubao-seedream-5-0-pro-260628` for the API account and retry after activation propagates.
+- Fewer or more than 12 images: reject the response. Use the 4x3 storyboard fallback only when separate multi-image output is unavailable.
+- Subject enlarges or shrinks during a return: reject and regenerate with the strict scale and framing prompt. After two retries, stabilize interior frames and report the fallback.
+- Return starts early after a click: keep the original segment active and use a Boolean condition at its `100%` exit.
+- Return freezes on its endpoint: use the unconditional return-to-Router transition.
+- A second click leaks into the next action: clear `interruptRequested` on return and Router exits.
 - Blank first frame: confirm `KeyFrameId` values target child `Image` IDs, not `ImageAsset` IDs.
-- Clean verify but wrong playback: `--verify` is structural; complete the rendered interaction checks.

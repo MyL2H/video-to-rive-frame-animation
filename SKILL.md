@@ -1,11 +1,11 @@
 ---
 name: video-to-rive-frame-animation
-description: Convert one or more videos into optimized transparent frame assets and one interruptible Rive CLI multi-action timeline, including whole-second return clips, background removal, PNG downscaling, WebP compression, frame extraction, and render verification. Use for sprite or character sequence playback; do not use it for vector rigging, skeletal animation, or generative image editing.
+description: Convert videos into optimized transparent 12 FPS frame assets and one interruptible Rive CLI multi-action timeline. Generate twelve-frame Seedream returns from whole-second cut points to the first source frame, then build, render-test, and deliver a self-contained Rive file. Use for sprite or character sequence playback; do not use it for vector rigging, skeletal animation, or generative image editing.
 ---
 
 # Video to Rive Frame Animation
 
-Turn each input video into a complete frame sequence and combine the resulting actions into one Rive CLI project. Preserve source motion and transparency while supporting an interruption that finishes the current action to the next configured cut point, returns to its first frame over exactly one second, and then starts a requested action.
+Turn each input video into a 12 FPS transparent frame sequence and combine the actions into one Rive CLI project. Preserve the source motion speed while supporting an interruption that finishes the current action at the next configured cut point, returns to its first frame over exactly one second, and starts a requested action.
 
 ## Default invocation
 
@@ -15,22 +15,26 @@ When the user supplies only one or more video files, treat this as the complete 
 使用 $video-to-rive-frame-animation 处理 1.mp4和2.mp4
 ```
 
-Do not ask for dimensions, quality, FPS, frame count, return duration, cut points, state-machine names, or output paths. Apply the profile below to every input and combine the actions into one Rive project. A single input produces one action in the same combined project.
+Do not ask for dimensions, quality, FPS, frame count, return duration, cut points, state-machine names, or output paths. Apply the profile below to every input and combine the actions into one Rive project.
 
 ## Default profile
 
-- Decode every source frame at the source FPS; do not sample or drop frames.
-- Remove the background and write full-resolution transparent PNG frames.
+- Play every source and return timeline at exactly `12 FPS`.
+- For a 24 FPS source, retain every second decoded frame so the original motion speed is preserved. Always retain decoded source frame `N-1`, even when it is not on the regular sample grid.
+- Save every retained frame as a complete RGB PNG before matting, then write full-resolution transparent PNG frames. Never derive the matte directly from an in-memory video frame when the source background is a measurable uniform color range.
+- For a uniform source background, pass its measured inclusive RGB range to `--background-min` and `--background-max` (`232..238` for the current E03/E06 assets). Remove only background-colored components connected to an image border, keep complete subject components, use `rembg` only for a small edge feather, and fill enclosed transparent holes. Do not delete every pixel in the RGB range globally; matching colors can occur inside the subject.
 - Resize proportionally to `50%`, using Lanczos and nearest integer pixel dimensions.
 - Write optimized transparent PNG and RGBA WebP frames with quality `82` and compression method `6`.
-- Define cut points at every whole second before the end, plus one final cut point at the decoded end frame.
-- For every action and cut point, generate a return clip from that exact boundary frame to source frame `0`.
-- ModelArk `flf2v` rejects `duration: 1` and `duration: 3`. Request Seedance with the verified `duration: 4`, require the complete return motion to finish during the first second and the last pose to hold afterward, then retain only the first second as `return_1s.mp4`. Do not speed up the full generated clip.
-- Use the strict scale and framing prompt built into `scripts/build_seedance_return_videos.py`.
-- Require the subject's overall size, body proportions, vertical anchor, and screen position to remain consistent with both endpoint frames. Reject and regenerate results that zoom, shrink, enlarge, crop, reframe, or drift.
-- Treat the strict Seedance prompt as necessary but not sufficient. Measure scale drift in every retained return. After two rejected retries, normalize only the interior frames with `scripts/stabilize_return_scale.py`; keep both endpoints exact and report that fallback.
-- Replace the generated endpoints with the exact source frames. Do not cross-fade the endpoints for a one-second return.
-- Retain every generated return frame and play the generated one-second sequence as a fixed `1s` timeline.
+- Define cut points at every whole second before the end, plus the decoded end frame. Map each source cut to its corresponding 12 FPS timeline frame.
+- For every action and cut point, use `doubao-seedream-5-0-pro-260628` to generate exactly 12 ordered return images from the exact boundary pose to source frame `0`.
+- Seedream requires a generation canvas of at least `921600` pixels. For a `2:3` source, generate at `1024x1536`, resize generated interiors to the source frame dimensions, then replace frames `0` and `11` with the exact source endpoints.
+- Prefer one request that returns 12 separate images. Do not generate 12 unrelated images independently. If the API cannot return 12 images in one request, generate one ordered 4x3 storyboard with 12 equal cells and slice it into 12 images; for `2:3` cells use `1024x1152` (`256x384` cells), read row-major, and report that fallback.
+- Require natural, evenly spaced motion and consistent identity, face, clothing, body proportions, subject size, feet anchor, screen position, style, lighting, camera, framing, and background. Reject zoom, shrink, enlarge, crop, reframe, drift, morphing, object changes, text, watermark, or cuts.
+- If Seedream's output safety rejects a child-safe animated subject, retry with explicit non-sensitive constraints such as fully clothed, child-friendly, and no violence or adult themes. Do not loosen the identity, timing, endpoint, scale, or framing constraints.
+- If output safety still rejects a storyboard after safe-prompt retries, build the return with `scripts/build_local_return_frames.py`, sampling source motion in reverse at 12 evenly spaced poses including both exact endpoints. Mark `source_reverse_sampling` as a generation exception; never present it as Seedream output.
+- Replace generated frames `0` and `11` with the exact source endpoints. Do not cross-fade the endpoints.
+- Play the 12 unique return images at `12 FPS`. Hold the final image through the end of the one-second timeline by repeating its held key at Rive frame `12`.
+- Measure scale and framing drift in every return. Retry rejected results at most twice. If drift remains, normalize only interior frames with `scripts/stabilize_return_scale.py`; keep both endpoints exact and report the fallback.
 - Build one Rive CLI project containing all logical actions, their forward segments, all return timelines, and the routing state machine.
 - Run structural checks, a local build, and sampled pointer-driven renders before reporting completion.
 - Preserve source files and put derived files in new directories.
@@ -51,49 +55,51 @@ Use another matte method for moving backgrounds, translucent objects, heavy moti
 - OpenCV, `rembg`, and `onnxruntime` for video extraction and background removal.
 - Rive CLI exposed as `rive`; the command is not normally named `rive-cli`.
 - A local segmentation model for `rembg` when offline background removal is required.
-- Volcengine ModelArk access to `doubao-seedance-2-5-260628` for return generation.
+- Volcengine ModelArk access to `doubao-seedream-5-0-pro-260628` for return image generation.
 
 Read credentials from a local environment file or process environment. Accept `ARK_API_KEY`, or the existing `SEEDANCE_API_KEY_ID` and `SEEDANCE_API_KEY_SECRET` pair. Never print, copy into generated artifacts, commit, or include credentials in this Skill. Do not upload source assets or use `rive push` unless the user explicitly asks.
 
 ## Workflow
 
 1. Inspect every video's resolution, FPS, decoded frame count, color mode, and representative frames. Confirm that automatic matting will produce usable edges.
-2. Extract and matte every frame:
+
+2. Extract and temporal-resample every frame to complete RGB PNG files, then matte the saved PNGs:
 
    ```bash
    python scripts/extract_remove_background.py \
-     --video input.mp4 --output <stem>_frames
+     --video input.mp4 --output <stem>_frames_12fps \
+     --rgb-output <stem>_frames_12fps_rgb --target-fps 12 \
+     --background-min 232 --background-max 238
    ```
 
-3. Create half-resolution PNG and WebP derivatives without changing the source frames:
+   The extraction manifest records every retained RGB frame, its exact source frame, the measured background range, and matte diagnostics. Verify the end frame is present. To re-matte an existing RGB PNG directory without decoding the video again, use `scripts/remove_background.py --source <rgb-dir> --output <rgba-dir> --background-min 232 --background-max 238`.
+
+3. Create half-resolution PNG and WebP derivatives without changing the transparent source frames:
 
    ```bash
    python scripts/prepare_frame_assets.py \
-     --source <stem>_frames \
-     --png-output <stem>_frames_50_png \
-     --webp-output <stem>_frames_50_webp \
-     --scale 0.5 --webp-quality 82
+     --source <stem>_frames_12fps \
+     --png-output <stem>_frames_12fps_50_png \
+     --webp-output <stem>_frames_12fps_50_webp \
+     --scale 0.5 --webp-quality 82 --webp-method 6
    ```
 
-4. Calculate the cut-point frames as specified in [references/interruptible-multi-action.md](references/interruptible-multi-action.md). Generate and process one return clip for every cut point:
+4. Calculate cut-point frames as specified in [references/interruptible-multi-action.md](references/interruptible-multi-action.md). Generate and process 12 return images for every cut point:
 
    ```bash
-   python scripts/build_seedance_return_videos.py \
-     --video input.mp4 --output-root <stem>_seedance_returns \
-     --boundary-frame <frame> run
-
-   python scripts/process_seedance_return_frames.py \
-     --video <stem>_seedance_returns/return_<label>ms/return_1s.mp4 \
-     --first-frame <stem>_seedance_returns/return_<label>ms/inputs/first_frame.png \
-     --last-frame <stem>_seedance_returns/return_<label>ms/inputs/last_frame.png \
-     --output-dir <stem>_seedance_returns/return_<label>ms/processed \
-     --blend-frames 0
-
-   python scripts/stabilize_return_scale.py \
-     --return-root <stem>_seedance_returns --replace
+   python scripts/build_seedream_return_frames.py \
+     --video input.mp4 --output-root <stem>_seedream_returns \
+    --boundary-frame <source-frame> --target-fps 12 --size 1024x1536 run
    ```
 
-   Before processing, run the same command with `--validate-only`. It rejects the retained clip unless its decoded duration is within `0.25s` of `1s`. Measure the retained first second against both endpoint frames and reject visible subject scale or framing drift. Retry at most twice with the same `duration: 4` request and strict first-second prompt. If drift remains, use the scale stabilization script for interior frames and report the fallback; never build from visibly enlarged frames and never alter the exact endpoints.
+   Require exactly 12 generated images. Replace the endpoints with exact source frames, write the complete `frames_rgb` PNGs first, matte all 12 frames with the same border-connected RGB policy and hole repair, and write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same strict prompt. If drift remains, run:
+
+   ```bash
+   python scripts/stabilize_return_scale.py \
+     --return-root <stem>_seedream_returns --replace
+   ```
+
+   Use `processed_stabilized/frames_50_webp` only when stabilization was required and report the fallback. Never alter the exact endpoints.
 
 5. Create one Rive CLI project, write a multi-action manifest, and build its RML:
 
@@ -103,6 +109,8 @@ Read credentials from a local environment file or process environment. Accept `A
      --manifest multi_action_manifest.json --project-dir project
    ```
 
+   Source actions use `fps: 12`. Each return has 12 unique frames, `fps: 12`, and `durationFrames: 12`; the builder adds one held key for the final frame at frame `12`.
+
 6. Validate the project and its behavior:
 
    ```bash
@@ -111,16 +119,16 @@ Read credentials from a local environment file or process environment. Accept `A
    rive project --once
    ```
 
-7. Render pointer-driven samples at interruption cut points, return midpoints, and return endpoints. Match the screenshots against the expected source or return frames. Also test uninterrupted playback, a second interruption during a return, and a target-action switch when multiple actions are present.
+7. Render pointer-driven samples at interruption cut points, return midpoints, and return endpoints. Match the screenshots against expected source or return frames. Also test uninterrupted playback, a second interruption during a return, and a target-action switch when multiple actions are present.
 
 Read [references/interruptible-multi-action.md](references/interruptible-multi-action.md) before implementing the state machine and [references/verified-workflow.md](references/verified-workflow.md) before the first frame-processing run.
 
 ## Interruption contract
 
-- Let the source action's decoded duration define its end. Use all whole-second boundaries strictly before the end, then always append the end frame as the final boundary.
-- If an interruption is requested at time `t`, continue the current action to the smallest configured boundary at or after `t`. For example, a request at `3.2s` continues to `4.0s`.
-- Seedance must complete each return during the generated clip's first second. Retain that second and exclude the held remainder from processing.
-- Each return runs for exactly `1s`, regardless of the source FPS.
+- Use all whole-second source boundaries strictly before the decoded end, then always append source frame `N-1`.
+- Map every source boundary to its retained 12 FPS timeline frame.
+- If an interruption is requested at time `t`, continue the current action to the smallest configured boundary at or after `t`.
+- Each return contains exactly 12 unique images and runs for exactly `1s` at `12 FPS`.
 - The return's first frame is the exact source boundary frame and its last frame is exact source frame `0`.
 - After the return, enter the action selected by `nextAction`; use action `0` by default.
 - When switching from action A to action B, set `nextAction` to B's zero-based index before requesting the interruption.
@@ -136,51 +144,45 @@ Read [references/interruptible-multi-action.md](references/interruptible-multi-a
 - Give each return a single unconditional `100%` exit to a one-frame Router state.
 - Give the Router no exit time. Route it to each action's first segment with immediate `nextAction` conditions.
 - Keep transitions between image-reference animations at `duration="0"`; frame references use `hold` keyframes.
+- A 12-frame one-second return uses `fps="12"`, `duration="12"`, image keys at frames `0..11`, and a repeated held key for the last image at frame `12`.
 
 ## Output contract
 
 For each input stem:
 
 ```text
-<stem>_frames/                         full-resolution transparent PNG frames
-<stem>_frames_50_png/                  half-resolution optimized PNG frames
-<stem>_frames_50_webp/                 half-resolution RGBA WebP frames
-<stem>_seedance_returns/
+<stem>_frames_12fps/                    full-resolution transparent 12 FPS PNG frames
+<stem>_frames_12fps_rgb/                complete RGB PNG frames before matting
+<stem>_frames_12fps_50_png/             half-resolution optimized PNG frames
+<stem>_frames_12fps_50_webp/            half-resolution RGBA WebP frames
+<stem>_seedream_returns/
   return_<label>ms/
-    inputs/                            exact source endpoint frames
-    request.json                       sanitized generation request
-    task.json, status.json             API task metadata with credentials redacted
-    return_seedance_raw.mp4            complete provider response, retained for audit
-    return_1s.mp4                      first-second return motion used by Rive
+    inputs/                              exact source endpoint frames
+    request.json                         sanitized generation request
+    response.json                        sanitized provider response
+    generated/                           12 provider images before endpoint replacement
     processed/
-      frames_rgba/                     transparent full-resolution return frames
-      frames_50_png/                   optimized return PNG frames
-      frames_50_webp/                  Rive return WebP frames
-      manifest.json                    counts, size, timing, and endpoint policy
-      processed_stabilized/            measured scale-normalized derivatives
-        frames_50_png/                 stabilized PNG frames used when needed
-        frames_50_webp/                stabilized WebP frames referenced by Rive
-        manifest.json                  scale measurements and endpoint policy
+      frames_rgb/                        exact endpoints plus 10 generated interior frames
+      frames_rgba/                       transparent full-resolution return frames
+      frames_50_png/                     optimized return PNG frames
+      frames_50_webp/                    Rive return WebP frames
+      manifest.json                      counts, size, timing, and endpoint policy
+      processed_stabilized/              measured scale-normalized derivatives
+        frames_50_png/                   stabilized PNG frames used when needed
+        frames_50_webp/                  stabilized WebP frames referenced by Rive
+        manifest.json                    scale measurements and endpoint policy
 ```
 
 For all inputs together:
 
 ```text
-<name>_multi_action_manifest.json      source actions and every return mapping
+<name>_multi_action_manifest.json        source actions and every return mapping
 <name>_multi_action_rive/
-  scene.rml                            generated images, animations, and state machine
-  multi_action_manifest.json           resolved project summary
-  build/<name>_multi_action_rive.riv   self-contained built Rive file
+  scene.rml                              generated images, animations, and state machine
+  multi_action_manifest.json             resolved project summary
+  build/<name>_multi_action_rive.riv      self-contained built Rive file
 ```
 
-The final report lists every source video and its dimensions, FPS, decoded frame count, cut points, generated return durations, return counts, PNG/WebP sizes, combined `.riv` path, and any scale, framing, or visual-check exception.
-
-## Example
-
-```text
-使用 $video-to-rive-frame-animation 处理 E07_SMUG_00001_.mp4
-```
-
-For a `512x768`, `24 FPS`, `107`-frame input, the verified profile creates cut points at frames `24`, `48`, `72`, `96`, and `106`; produces five one-second return sequences; resizes frames to `256x384`; and builds one interruptible action. The internal boundaries are `1s`, `2s`, `3s`, and `4s`, followed by the decoded end label `4458ms`.
+The final report lists every source video and its dimensions, source FPS, decoded frame count, 12 FPS retained frame count, cut points, generated return counts, PNG/WebP sizes, combined `.riv` path, and any scale, framing, generation, or visual-check exception.
 
 Do not claim completion from `--verify` alone. Structural verification and rendered interaction checks are both required.

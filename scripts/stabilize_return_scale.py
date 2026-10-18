@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from rgb_matte import fill_enclosed_transparent
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -197,12 +199,15 @@ def process_clip(
             (round(width * 0.5), round(height * 0.5)),
             getattr(Image, "Resampling", Image).LANCZOS,
         )
+        resized_rgba = np.asarray(resized).copy()
+        resized_rgba[:, :, 3] = fill_enclosed_transparent(resized_rgba[:, :, 3])
+        resized = Image.fromarray(resized_rgba)
         resized.save(png_dir / path.name, format="PNG")
         resized.save(
             webp_dir / f"{path.stem}.webp",
             format="WEBP",
             quality=webp_quality,
-            method=min(webp_method, 4),
+            method=webp_method,
         )
 
     manifest = {

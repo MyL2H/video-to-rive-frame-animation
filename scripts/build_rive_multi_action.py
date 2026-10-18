@@ -29,6 +29,8 @@ class ReturnClip:
     label: str
     boundary_frame: int
     frames: list[FrameRef]
+    fps: float
+    duration_frames: int
 
 
 @dataclass(frozen=True)
@@ -120,11 +122,34 @@ def load_actions(manifest_path: Path) -> tuple[list[Action], dict, tuple[int, in
             )
             if len(return_paths) < 2:
                 raise ValueError(f"Return clip needs at least two frames: {return_data}")
+            return_fps = float(return_data.get("fps", manifest.get("returnFps", 12)))
+            duration_frames = int(
+                return_data.get(
+                    "durationFrames",
+                    round(
+                        return_fps
+                        * float(
+                            return_data.get(
+                                "durationSeconds",
+                                manifest.get("returnDurationSeconds", 1),
+                            )
+                        )
+                    ),
+                )
+            )
+            if return_fps <= 0 or duration_frames <= 0:
+                raise ValueError(f"Invalid return timing: {return_data}")
             return_refs, next_component_id = make_frames(
                 return_paths, project_dir, next_component_id
             )
             returns.append(
-                ReturnClip(str(return_data["label"]), boundary, return_refs)
+                ReturnClip(
+                    str(return_data["label"]),
+                    boundary,
+                    return_refs,
+                    return_fps,
+                    duration_frames,
+                )
             )
 
         if not returns:
@@ -147,8 +172,13 @@ def animation_block(
     animation_id: int,
     fps: float,
     frames: list[FrameRef],
+    duration: int | None = None,
+    hold_final_to_duration: bool = False,
 ) -> list[str]:
-    duration = len(frames) - 1
+    if duration is None:
+        duration = len(frames) - 1
+    if duration < len(frames) - 1:
+        raise ValueError("Animation duration cannot precede the final frame key")
     lines = [
         "    <LinearAnimation fps={} duration={} loopValue=\"oneShot\" name={} id=\"0:{}\">".format(
             quoteattr(number(fps)),
@@ -163,6 +193,12 @@ def animation_block(
         lines.append(
             "          <KeyFrameId value=\"0:{}\" frame={} interpolationType=\"hold\"/>".format(
                 frame.component_id, quoteattr(number(frame_index))
+            )
+        )
+    if hold_final_to_duration and duration > len(frames) - 1:
+        lines.append(
+            "          <KeyFrameId value=\"0:{}\" frame={} interpolationType=\"hold\"/>".format(
+                frames[-1].component_id, quoteattr(number(duration))
             )
         )
     lines.extend(["        </KeyedProperty>", "      </KeyedObject>", "    </LinearAnimation>"])
@@ -367,8 +403,10 @@ def build_rml(
                 animation_block(
                     f"{action.name} return {clip.label} to 0",
                     return_animations[action_index][return_index],
-                    len(clip.frames) - 1,
+                    clip.fps,
                     clip.frames,
+                    clip.duration_frames,
+                    True,
                 )
             )
             lines.extend(
@@ -522,9 +560,15 @@ def main() -> None:
                     {
                         "label": clip.label,
                         "boundaryFrame": clip.boundary_frame,
-                        "frameCount": len(clip.frames),
-                        "playbackFps": len(clip.frames) - 1,
-                        "durationSeconds": 1,
+                        "uniqueFrameCount": len(clip.frames),
+                        "keyframeCount": (
+                            len(clip.frames) + 1
+                            if clip.duration_frames > len(clip.frames) - 1
+                            else len(clip.frames)
+                        ),
+                        "playbackFps": clip.fps,
+                        "durationFrames": clip.duration_frames,
+                        "durationSeconds": clip.duration_frames / clip.fps,
                     }
                     for clip in action.returns
                 ],

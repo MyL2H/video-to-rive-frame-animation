@@ -12,12 +12,12 @@ That single request is sufficient. Each video becomes one logical action in one 
 
 ## Default workflow
 
-- Preserve source FPS and extract every frame.
-- Remove backgrounds and write transparent PNG frames.
-- Resize to 50% and create optimized PNG and RGBA WebP frames.
-- Generate a provider response whose complete return motion finishes in its first second, then retain only that second for every whole-second cut point and the decoded end.
-- Use exact source boundary and first frames as the fixed one-second return endpoints.
-- Require Seedance to preserve subject scale, body proportions, vertical anchor, and framing throughout the generated return.
+- Sample source motion to exactly 12 FPS while preserving playback speed and the decoded end frame.
+- Save complete RGB PNG frames first, then create transparent PNG frames. For the current uniform background, remove only `RGB 232..238` regions connected to an image border, keep complete subject components, and use `rembg` for edge feathering and hole repair.
+- Resize to 50% with Lanczos, repair any resampling holes, and create optimized PNG and RGBA WebP frames.
+- Generate exactly 12 ordered Seedream return images for every whole-second cut point and the decoded end.
+- Replace return frames `0` and `11` with the exact source RGBA boundary and first frames.
+- Require Seedream to preserve subject identity, scale, body proportions, feet anchor, framing, and background throughout the return.
 - Measure return-frame scale against exact endpoints, retry rejected generations, and normalize only interior frames when the provider still drifts.
 - Build a Rive state machine with delayed interruption and action routing.
 - Verify the project structure, local build, frame matching, and pointer-driven behavior.
@@ -32,10 +32,11 @@ An interruption continues the current action to the next configured cut point, p
 ## Outputs
 
 ```text
-<stem>_frames/
-<stem>_frames_50_png/
-<stem>_frames_50_webp/
-<stem>_seedance_returns/
+<stem>_frames_12fps/
+<stem>_frames_12fps_rgb/
+<stem>_frames_12fps_50_png/
+<stem>_frames_12fps_50_webp/
+<stem>_seedream_returns/
 <name>_multi_action_manifest.json
 <name>_multi_action_rive/
 ```
@@ -44,7 +45,7 @@ An interruption continues the current action to the next configured cut point, p
 
 - Python 3, Pillow, OpenCV, `rembg`, and `onnxruntime`
 - Rive CLI available as `rive`
-- Volcengine ModelArk access to the configured Seedance model
+- Volcengine ModelArk access to `doubao-seedream-5-0-pro-260628`
 
 Credentials stay in local environment variables or a protected local environment file and are never committed.
 

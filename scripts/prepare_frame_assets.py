@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
+
+from rgb_matte import fill_enclosed_transparent
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +58,9 @@ def main() -> None:
             if source_image.size != first_size:
                 raise ValueError(f"Frame size mismatch: {source_path}")
             frame = source_image.convert("RGBA").resize(size, resampling.LANCZOS)
+        rgba = np.asarray(frame).copy()
+        rgba[:, :, 3] = fill_enclosed_transparent(rgba[:, :, 3])
+        frame = Image.fromarray(rgba)
 
         frame.save(args.png_output / source_path.name, format="PNG", optimize=True)
         webp_path = args.webp_output / f"{source_path.stem}.webp"

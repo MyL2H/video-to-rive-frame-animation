@@ -1,38 +1,23 @@
-# Verified Workflow and Constraints
+# Verified 12 FPS Workflow and Constraints
 
-This document records the frame-processing and base Rive invariants demonstrated on a 24 FPS character video and the checks that caught real errors during implementation. For the default interruptible combined project, also follow `interruptible-multi-action.md`. Numbers in the observed example are evidence from one run, not performance guarantees.
+This document records frame-processing and Rive invariants for the 12 FPS Seedream profile. Keep source FPS metadata, but play retained frame sequences at 12 FPS.
 
 ## Default request handling
 
-A request that names only videos is complete. For example:
-
-```text
-使用 $video-to-rive-frame-animation 处理 1.mp4和2.mp4
-```
-
 Apply this profile without asking for more parameters:
 
-1. Process each video independently from the others.
-2. Preserve source FPS and extract all frames in source order.
-3. Produce transparent full-resolution PNG frames.
-4. Resize to 50% with Lanczos.
-5. Produce optimized PNG and RGBA WebP at quality 82 and method 6.
-6. Generate and process every whole-second and end-of-media return sequence.
-7. Build one combined Rive multi-action project sized to the reduced frames.
-8. Verify frame continuity, Rive structure, a local build, and sampled renders.
-9. Keep source files unchanged and return paths and measured results for every video.
+1. Process each video independently.
+2. Temporally sample to 12 FPS while preserving motion speed.
+3. Always retain decoded source frame `N-1`.
+4. Produce transparent full-resolution PNG frames.
+5. Resize to 50% with Lanczos.
+6. Produce optimized PNG and RGBA WebP at quality 82 and method 6.
+7. Generate exactly 12 Seedream return images for every whole-second and end-of-media cut point.
+8. Replace generated return endpoints with exact source frames.
+9. Build one combined Rive project sized to the reduced frames.
+10. Verify frame continuity, Rive structure, local build, and sampled renders.
 
-If a batch item fails, continue with independent items and summarize failures at the end. Ask the user only for conditions listed in `SKILL.md`; otherwise use these defaults.
-
-## Applicable scenarios
-
-- A short video of one subject on a simple, mostly uniform background.
-- An existing numbered sequence of transparent PNG frames.
-- A Rive timeline that should play the frames in order and loop.
-- Multiple source actions that share one Rive scene and can be selected after an interruption.
-- Deliverables that must reduce raster and `.riv` size while retaining transparency.
-
-Use a different matte method for footage with moving backgrounds, translucent objects, heavy motion blur, fine hair, or semitransparent effects. Use vector rigging or mesh deformation instead of frame playback when the animation must be edited as articulated parts.
+If a batch item fails, continue independent items and summarize failures at the end.
 
 ## Input specification
 
@@ -40,97 +25,98 @@ Use a different matte method for footage with moving backgrounds, translucent ob
 
 - Readable by OpenCV.
 - One video stream; audio is ignored.
-- Known or discoverable FPS and frame count.
+- Known FPS and decoded frame count.
 - Subject separated from the background well enough for general segmentation.
-
-### Existing frames
-
-- Ordered by a numeric suffix.
-- Numbering starts at `0000` and has no gaps.
-- All frames have identical dimensions.
-- RGBA is required for transparent input/output. RGB input is accepted by the optimization script but the result will remain opaque.
-- The optimization script accepts PNG and writes PNG plus WebP. Rive can also reference PNG, JPEG, or WebP image assets.
 
 ### Rive project
 
-- Rive CLI is installed and the executable is `rive`.
+- Rive CLI executable is `rive`.
 - Project directory contains `rive.yaml`, generated `scene.rml`, helper scripts, and `build/`.
-- Frame files may live beside the project. `file=` can reference them relatively and embeds their bytes in the built `.riv`.
-
-## Output specification
-
-| Artifact | Contract |
-|---|---|
-| RGBA PNG frames | Gap-free numbering, original aspect ratio, transparent background |
-| Resized PNG frames | Same count and ordering; dimensions are an integer scale or explicit size |
-| WebP frames | Same count, order, dimensions, and alpha range as resized PNG frames |
-| `scene.rml` | Root-level image assets, one shared Solo, one image child per frame, action segments, returns, and routing states |
-| Timeline | Source FPS preserved in action segments; each return retains every frame from the generated first-second segment and is played for exactly one second |
-| Return scale | Measured against exact endpoints; rejected retries are normalized only in interior frames and the fallback is reported |
-| `.riv` | Self-contained build with all referenced images embedded |
+- Frame files may live beside the project. `file=` can reference them relatively and embed their bytes in the built `.riv`.
 
 ## Execution procedure
 
 ### 1. Inspect before transforming
 
-Read source metadata and sample the first, middle, and last frames. Verify that the background is suitable for automatic matte extraction. Record the source FPS and frame count; do not infer them from filename count alone.
+Read source metadata and sample the first, middle, and last frames. Verify that the background is suitable for automatic matte extraction. Record source FPS, decoded frame count, selected 12 FPS indices, and the exact end-frame mapping.
 
-### 2. Extract and remove the background
+### 2. Temporal sampling and two-stage background removal
 
-For video input, use `scripts/extract_remove_background.py`. It:
+Run `scripts/extract_remove_background.py --target-fps 12 --rgb-output <stem>_frames_12fps_rgb`. It:
 
-- reads frames through OpenCV;
-- runs `rembg` with a general model and the CPU provider;
-- disables alpha matting by default for predictable runtime behavior;
-- writes RGBA PNGs with Pillow to preserve the channel order.
+- selects source frames at 12 FPS;
+- appends decoded source frame `N-1` when needed;
+- saves every retained source frame as a complete RGB PNG first;
+- runs `rembg` with `isnet-general-use` and CPU provider only to obtain edge alpha;
+- removes only the measured background range (`232..238` for the current E03/E06 assets) when it is connected to an image border;
+- keeps complete foreground components and fills enclosed transparent holes;
+- disables rembg alpha matting for predictable runtime behavior;
+- writes RGBA PNGs with Pillow;
+- writes `extraction_manifest.json` with output-to-source frame mappings.
 
-When running inside a restricted sandbox, temporary cache location can matter. A verified invocation pattern is:
+Expected counts for the current 24 FPS examples:
 
-```bash
-TMPDIR=/private/tmp \
-NUMBA_CACHE_DIR=/private/tmp/numba-cache \
-python scripts/extract_remove_background.py \
-  --video input.mp4 --output frames
-```
+| Source | 12 FPS frames | Source cut frames | Timeline cut frames |
+|---|---:|---|---|
+| E03: 141 frames | 71 | `24,48,72,96,120,140` | `12,24,36,48,60,70` |
+| E06: 90 frames | 46 | `24,48,72,89` | `12,24,36,45` |
 
-Do not assume the model is installed. Check model availability first and ask before downloading when network access is restricted.
+Do not use a global RGB threshold as the final alpha. The source subject can contain pixels in the same `232..238` range as the background. The border-connected mask plus foreground-component retention is the required protection against interior holes. The complete RGB directory is an auditable intermediate and must remain beside the transparent output.
 
 ### 3. Downscale and compress
 
-`scripts/prepare_frame_assets.py` resizes with Lanczos and writes both PNG and WebP. Defaults used in the verified run:
+`scripts/prepare_frame_assets.py` resizes with Lanczos and writes both PNG and WebP. Use:
 
-- scale: `0.5`;
-- WebP quality: `82`;
-- WebP compression method: `6`;
+- scale `0.5`;
+- WebP quality `82`;
+- WebP compression method `6`;
 - RGBA preserved;
-- source files unchanged.
+- source transparent files unchanged.
 
-Use `--width` and `--height` when an exact output size matters. Use `--scale` when proportional reduction is sufficient. Validate dimensions and alpha before proceeding.
+Validate dimensions, frame counts, numeric ordering, and alpha channels before proceeding.
 
-### 4. Generate the combined Rive project
+### 4. Generate twelve-frame returns
 
-Create a normal Rive CLI project:
+Run `scripts/build_seedream_return_frames.py` once for every cut point. The helper:
 
-```bash
-rive create project
-```
+- saves exact source endpoints;
+- creates a strict fixed-scale Seedream request;
+- uses a `1024x1536` canvas for the current `2:3` sources because Seedream rejects image areas below `921600` pixels;
+- resizes generated interior images to the source dimensions before endpoint replacement;
+- requires 12 returned images;
+- stores remote URL-free sanitized response metadata;
+- replaces frames `0` and `11` with exact endpoints;
+- mattes and optimizes all 12 frames;
+- reports 12 FPS and one-second return timing.
 
-Write the multi-action manifest described in `interruptible-multi-action.md`, then run `scripts/build_rive_multi_action.py`. The generator validates frame numbering and dimensions and emits:
+Do not use 12 unrelated independent image requests when one multi-image request or a 4x3 storyboard can provide coherent ordering. If a storyboard fallback is used, request `1024x1152` for 12 equal `256x384` cells, validate four columns, three rows, equal cell sizes, row-major reading order, and panel continuity before slicing.
+
+When Seedream's output safety rejects a clearly child-safe animated subject, retry with explicit non-sensitive wording such as fully clothed, child-friendly, and no nudity, violence, injury, weapons, or adult themes. Keep every temporal, identity, endpoint, scale, and framing requirement unchanged.
+
+If the safe wording is still rejected, use `scripts/build_local_return_frames.py` as the final local fallback. It samples 12 evenly spaced poses from the exact boundary source frame to exact source frame `0`, preserves natural source motion, and records `source_reverse_sampling` in `fallback.json`. Do not describe this fallback as generated imagery.
+
+### 5. Validate return scale and framing
+
+Measure each interior frame against both endpoints. Reject large or small subjects, feet movement, camera drift, or changed framing. Retry at most twice. If drift remains, run `scripts/stabilize_return_scale.py` and use only its interior frames. Preserve exact endpoints and report the fallback.
+
+### 6. Generate the combined Rive project
+
+Write a multi-action manifest and run `scripts/build_rive_multi_action.py`. The generator validates numbering and dimensions and emits:
 
 - root-level `ImageAsset` elements;
-- one `Solo` centered in the artboard;
-- one `Image` child per frame at local `(0, 0)` with centered origin;
+- one shared `Solo`;
+- one `Image` child per unique frame;
 - `KeyFrameId` keys for `Solo.activeComponentId` at property key `296`;
-- forward action segments, one return animation per cut point, and one-frame Router animations.
-- a state machine with `interruptRequested` and `nextAction` view-model properties.
+- 12 FPS action segments;
+- 12-image, one-second return animations;
+- one-frame Router animations;
+- `interruptRequested` and `nextAction` view-model properties.
 
-For `N` numbered frames `0..N-1`, an animation containing all of them uses `duration="N-1"`. Each `KeyFrameId` points at the corresponding child `Image` component.
+Source animation segments use `duration=N-1` at 12 FPS. Return animations use `duration=12` at 12 FPS, image keys at `0..11`, and a repeated last-image hold key at `12`.
 
-`scripts/build_rive_timeline.py` remains available for an explicitly requested basic looping timeline without interruption or action routing.
+### 7. Verify and build
 
-### 5. Verify and build
-
-Run all three structural checks:
+Run:
 
 ```bash
 rive project --verify
@@ -140,85 +126,60 @@ rive project --once
 
 Expected invariants:
 
-- `Image` and `ImageAsset` counts match the embedded source and return frames; `KeyFrameId` adds one held reference for each Router animation;
+- `Image` and `ImageAsset` counts match unique embedded source and return frames;
 - one shared `Solo` and one `StateMachine`;
-- one `LinearAnimation` per source segment, return clip, and Router;
+- one `LinearAnimation` per source segment, return, and Router;
 - zero errors and zero warnings;
-- `.riv` size is plausible for the compressed embedded images.
+- `.riv` size is plausible for embedded WebP images.
 
-Then render representative frames. Compare each screenshot with the matching source frame after accounting for renderer behavior described below.
+### 8. Render interaction samples
+
+Render pointer-driven samples at:
+
+- just before and after a whole-second interruption boundary;
+- return time `0s`, `0.5s`, and `1s`;
+- restarted target action after routing;
+- a second interruption during a return;
+- an action switch using `nextAction=1`.
+
+Composite transparent frames over the screenshot background and image-match against complete candidate sequences. Do not trust `--advance` alone.
 
 ## Important Rive details
 
 ### Active component IDs
 
-`Solo.activeComponentId` selects a child component. A correct key looks like:
-
-```xml
-<KeyFrameId value="0:2000" frame="0" interpolationType="hold"/>
-<KeyFrameId value="0:2001" frame="1" interpolationType="hold"/>
-```
-
-The values above are the IDs of `Image` children. Do not use the IDs from their `ImageAsset` elements. During the verified implementation, using asset IDs caused the initial headless render to be blank even though later frames appeared through renderer tolerance. Correcting the references to child component IDs fixed the initial frame and made the structure semantically valid.
-
-### Image assets
-
-Assets are root elements:
-
-```xml
-<Rive version="1" kind="fragment">
-  <ImageAsset file="../frames/frame_0000.webp" name="Frame 0000" id="0:1000"/>
-  <Artboard ...>
-    ...
-  </Artboard>
-</Rive>
-```
-
-The CLI docs allow `file=` outside the project directory, but external file changes are not watched. Rebuild manually after changing shared frame assets.
+Each `KeyFrameId` must point to the corresponding child `Image` component ID. Using `ImageAsset` IDs can produce a blank first frame.
 
 ### Frame timing
 
-Reference keyframes must use `hold`. Preserve all frames unless the user explicitly requests temporal sampling; dropping frames changes motion timing and is not equivalent to reducing pixel size. In the combined project, action segments and returns are one-shot animations joined by the state machine.
+Reference keyframes use `hold`. Preserve the temporal sample order and target 12 FPS. A 12-image return needs one additional held key at frame `12` to occupy the full one-second interval.
+
+### Image assets
+
+Assets are root elements before the `Artboard`. External frame changes are not watched; rebuild after changing shared frame assets.
 
 ## Visual validation notes
 
-These behaviors were observed with the local CLI used for the verified run and should be measured rather than generalized:
-
-- Headless screenshot startup consumed roughly one source-animation frame. Screenshots intended for exact frame comparison landed one frame early until the requested advance time was increased by one frame.
-- Screenshots of a transparent artboard were written with an opaque dark matte in that environment. Composite transparent WebP/PNG frames over the same RGB color before pixel comparison.
-- After aligning the timing and matte, five sampled frames across the timeline matched their sources with a maximum RGB channel delta of `1`.
-
-Use image matching to identify which source frame a screenshot actually shows when timing is uncertain. Do not rely only on the requested `--advance` value.
-
-## Observed optimization example
-
-One verified character sequence had 141 frames at `512x768`, played at 24 FPS:
-
-| Stage | Observed size |
-|---|---:|
-| Original RGBA PNG frames | about 26 MB |
-| `256x384` optimized PNG frames | about 9.0 MB |
-| `256x384` WebP frames, quality 82 | about 2.2 MB |
-| Built `.riv` after WebP migration | about 2.1 MB |
-
-The final `.riv` was about 92% smaller than the earlier PNG-based build. Actual size depends on artwork, alpha complexity, dimensions, frame count, and compression quality.
+- Headless screenshot startup can consume roughly one animation frame. Align comparisons by image matching.
+- Screenshots of transparent artboards may use an opaque matte. Composite source frames over the same RGB color before pixel comparison.
+- Contact sheets must show no blank frame, wrong-size asset, enlarged or shrunken subject, framing drift, or discontinuous pose.
 
 ## Common failure modes
 
-- `rive-cli: command not found`: use the installed `rive` executable.
-- Blank first frame: inspect `Solo.activeComponentId` and confirm its values are child `Image` IDs.
-- No animation or frozen appearance: verify `propertyKey="296"` and `KeyFrameId`, not numeric keyframes.
-- Wrong colors after export: do not save RGBA arrays as BGR/BGRA through OpenCV; use Pillow or explicit channel conversion.
-- Missing frames: validate continuous numeric suffixes before building.
-- Enlarged or shrunken subject during a return: reject the retained first-second clip and regenerate with `duration: 4`, strict fixed scale and framing, and a first-second completion requirement. If two retries still drift, use `scripts/stabilize_return_scale.py` on interior frames and report the fallback; never change endpoints or rescale silently.
-- Sudden motion or shortened duration: frame sampling changed the sequence; pixel reduction alone should not change frame count.
-- Large `.riv`: confirm the project references compressed WebP rather than oversized PNG files.
-- Interrupt request lost before the boundary: use a Boolean latch and a conditioned `100%` exit, not a fire-once Trigger.
-- Return freezes or action switching fails: verify the unconditional return-to-Router transition and the Router's immediate `nextAction` routes.
-- Clean verify but wrong appearance: verify is structural. Render and compare frames.
+- `ModelNotOpen`: the model is not activated for the API account or activation has not propagated.
+- Wrong return image count: reject and use the documented storyboard fallback only when supported.
+- Blank first frame: inspect `Solo.activeComponentId` and target child `Image` IDs.
+- Frozen animation: verify `propertyKey="296"` and `KeyFrameId` keys.
+- Slow or fast playback: verify source and return FPS are both 12 and return duration is 12 frames.
+- Missing final return frame visibility: verify the repeated final held key at frame `12`.
+- Missing source frames: inspect `extraction_manifest.json` and ensure decoded frame `N-1` was retained.
+- Enlarged or shrunken return subject: reject, retry twice, then stabilize only interior frames.
+- Interrupt request lost before the boundary: use a Boolean latch and conditioned `100%` exit.
+- Return freezes or switching fails: verify unconditional return-to-Router transition and Router routes.
+- A second click leaks: clear `interruptRequested` on return and Router exits.
 
 ## Privacy and delivery
 
 - Keep source assets local unless the user explicitly requests upload or publishing.
-- Do not put user paths, account IDs, model credentials, CDN UUIDs, or personal file names in the Skill or generated documentation.
-- `rive push`, `--publish`, and hosted assets can involve external services or redistribution. Require explicit user authorization for those operations.
+- Do not put credentials, account IDs, provider request IDs, remote image URLs, CDN UUIDs, or personal paths in generated documentation.
+- `rive push`, `--publish`, and hosted assets require explicit user authorization.
