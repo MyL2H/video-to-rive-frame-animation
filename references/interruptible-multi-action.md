@@ -38,19 +38,19 @@ An interruption at `t` is handled at the first boundary greater than or equal to
 
 ## Seedream return generation
 
-Read [storyboard-geometry.md](storyboard-geometry.md) for the source-ratio equations, exact pixel prompt contract, raw-board overlay review and rejection rules. Canvas divisibility alone does not establish equal semantic panels; never conceal an invalid board with per-panel resizing.
+Read [storyboard-geometry.md](storyboard-geometry.md) for source-ratio equations, exact pixel geometry, hard technical checks and advisory visual review. Exact canvas dimensions allow fixed-grid slicing; they do not certify subject placement or visual quality. Record those imperfections and continue without per-panel resizing or regeneration.
 
 For every boundary:
 
 1. Save the exact RGB source boundary frame as `inputs/first_frame.png`.
 2. Save exact source frame `0` as `inputs/last_frame.png`.
 3. Build one transparent RGBA reference containing the two endpoints side by side, then send one `doubao-seedream-5-0-pro-260628` request for a source-ratio-derived transparent PNG 4x3 storyboard (`2016x2268` for `512x768` sources). Use `background: transparent`, `output_format: png`, and `n: 1`. Slice twelve equal source-ratio cells (`504x756`, 2:3 only for `512x768` sources) row-major and resize generated interiors back to the source dimensions.
-4. Require the complete natural return motion from the boundary pose to the first-frame pose across those 12 images.
-5. Preserve the subject's identity, face, clothing, body proportions, overall size, feet anchor, screen position, style, lighting, camera, framing, and background.
-6. Reject zoom, shrink, enlarge, crop, reframe, drift, morphing, object changes, text, watermark, and cuts.
+4. Prompt for complete natural return motion from the boundary pose to the first-frame pose across those 12 images.
+5. Prompt for consistent subject identity, face, clothing, body proportions, overall size, feet anchor, screen position, style, lighting, camera, framing, and background.
+6. Record zoom, scale/anchor drift, clipping, detail changes, uneven motion, expression reversals, gutters or other visual defects as warnings. Continue with usable generated frames without regeneration or an approval gate.
 7. Replace generated frame `0` and frame `11` with the exact source RGBA endpoints mapped by `extraction_manifest.json`.
 8. When generated frames contain real provider Alpha, preserve that Alpha and fill enclosed transparent holes without running `rembg`. For the RGB fallback only, keep complete RGB PNG frames in `processed/frames_rgb` first, then run the same border-connected RGB matte and transparent-hole repair as source frames. Downscale and write PNG/WebP derivatives afterward.
-9. Measure interior scale and framing against both exact endpoints. Retry at most twice. Reject invalid grids and distorted body proportions. Only residual uniform drift on a visually valid equal grid may use `scripts/stabilize_return_scale.py` on interior frames; report the fallback.
+9. Inspect raw boards, overlays and contact sheets when available; record any viewing limitation without blocking. Scale/anchor measurements are optional diagnostics. Optional uniform interior stabilization with `scripts/stabilize_return_scale.py` must preserve exact endpoints and be reported. Retry actual API/transport or unusable-output failures at most twice; stricter visual rejection applies only when explicitly requested.
 
 Seedream transparent generation accepts exactly one input PNG containing real Alpha and rejects RGB inputs, multiple inputs, and non-PNG output. The default request therefore uses one left/right RGBA endpoint reference and returns one transparent 4x3 storyboard. Seedream also rejects generation areas above `4624220` pixels. For `512x768` sources use `2016x2268`; derive other layouts from the original single-frame ratio and require sharp edges, fine detail, and no blur or compression artifacts.
 
@@ -60,7 +60,7 @@ If Seedream output safety rejects the storyboard after non-sensitive prompt miti
 
 ## Return timing
 
-A return has 12 unique images:
+A return has 12 ordered frame files; similar or repeated poses are allowed:
 
 - `fps: 12`
 - `durationFrames: 12`
@@ -144,7 +144,7 @@ Do not use `ViewModelPropertyTrigger` for the delayed request.
 - Key `Solo.activeComponentId` (`propertyKey="296"`) with `KeyFrameId` values pointing to child `Image` component IDs.
 - Use `interpolationType="hold"` for every image-reference key.
 - Source animation duration is `N-1` at 12 FPS.
-- Return animation duration is `12` at 12 FPS, with 12 unique images and a repeated final held key at frame `12`.
+- Return animation duration is `12` at 12 FPS, with 12 ordered frame files and a repeated final held key at frame `12`.
 - Keep transitions between frame animations at `duration="0"`.
 - Match artboard and image dimensions unless scaling is intentional.
 
@@ -166,14 +166,14 @@ Also verify:
 2. A second click during a return does not cause another return after routing.
 3. With multiple actions, setting `nextAction=1` routes to action `1` after the return.
 4. Every return first and last frame matches the exact source endpoint.
-5. The contact sheet shows no blank frame, wrong-size asset, enlarged or shrunken subject, framing drift, or discontinuous pose at the source-to-return boundary.
+5. No missing/empty frames or wrong-size assets. Record scale drift, framing drift and discontinuous poses at the source-to-return boundary as warnings; these do not block delivery by default.
 
 ## Common failures
 
 - `ModelNotOpen`: activate `doubao-seedream-5-0-pro-260628` for the API account and retry after activation propagates.
-- Invalid storyboard grid, cell ratio, or panel count: reject the response and retry the same strict request. The required result is one 4x3 storyboard with 12 equal panels at the original single-frame aspect ratio.
+- Wrong canvas dimensions, invalid source-ratio geometry or empty/missing usable frames: technical failures; correct the request or retry generation at most twice. Imperfect subject placement inside the fixed 4x3 grid is a warning, not a retry trigger.
 - Transparent request returns opaque RGB: reject it and use the exact `RGB(235,235,235)` fallback request, then matte only saved RGB PNG frames.
-- Subject enlarges or shrinks during a return: reject and regenerate with the strict scale and framing prompt. After at most two retries, reject invalid geometry; stabilize only small residual uniform drift on an otherwise valid grid and report it.
+- Subject enlarges or shrinks during a return: record a warning and use the generated frames. Uniform interior stabilization is optional; keep exact endpoints and report any use.
 - Return starts early after a click: keep the original segment active and use a Boolean condition at its `100%` exit.
 - Return freezes on its endpoint: use the unconditional return-to-Router transition.
 - A second click leaks into the next action: clear `interruptRequested` on return and Router exits.

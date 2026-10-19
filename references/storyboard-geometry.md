@@ -1,6 +1,6 @@
 # Equal cells at the original image aspect ratio
 
-Read this before generating or accepting any return storyboard. Canvas dimensions alone do not prove that the model placed twelve poses in twelve equal cells.
+Read this before generating or processing a return storyboard. The numerical canvas/cell contract controls deterministic slicing. Subject placement and appearance inside those cells are advisory by default; canvas dimensions alone do not prove semantic layout quality.
 
 ## Geometry contract
 
@@ -27,16 +27,20 @@ For the current `512×768` sources:
 
 Preserve source-frame coordinates inside each cell: `(x,y)` becomes `(c*panelWidth+s*x, r*panelHeight+s*y)`. This applies to the subject's scale, body proportions, feet anchor and surrounding empty space. A panel is a uniformly scaled full frame, not a tightly cropped character thumbnail. Never scale each pose to its own bounding box. Keep the same props throughout the sequence.
 
-`storyboard_geometry.py` appends this numerical contract to both transparent and RGB requests, including custom prompts. Custom prompts add motion guidance; they must not replace the geometry contract. No grid lines, panel labels, gutters, borders or outer padding may appear in provider output.
+`storyboard_geometry.py` appends this numerical contract to both transparent and RGB requests, including custom prompts. Custom prompts add motion guidance; they must not replace the geometry contract. The prompt asks for no grid lines, panel labels, gutters, borders or outer padding. If the provider nevertheless adds them, record the defect and continue normal slicing/matting rather than automatically regenerating.
 
-## Validate before acceptance
+## Technical validation and advisory review
 
-1. Run `prepare`, then `generate`. Retain the unmodified provider `generated/storyboard.png`.
-2. The helper requires the exact requested canvas size, exact source aspect ratio per cell, and twelve nonempty Alpha cells. When source Alpha is available, it rejects visible pixels in the outer half of margins that are clear in both source endpoints. This conservatively catches neighboring feet, clipping, grid artifacts and gross shifts. It writes `generated/layout_validation.json` and a local-only `storyboard_grid_overlay.png` before slicing. A failed check stops generation and standalone `process` also refuses the board.
-3. View the original and the overlay. Verify **all twelve** subjects are wholly inside their numbered cell, with equal row/column spacing, no adjacent-cell fragments, no stretched faces/bodies, no independent row scaling and no missing props. Compare the generated first/last panels against the exact source endpoints **before** endpoint replacement. Review identity and natural pose continuity; Alpha/size checks cannot establish these.
-4. Only after visual acceptance, run `process`. Interior panels may be resized to `W×H` with the same scale on both axes. The script refuses mismatched aspect ratios. RGB output requires inspection of the saved RGB slices and subsequent matte contact sheet because opaque backgrounds cannot establish subject occupancy automatically.
-5. Measure stable head/torso scale and feet anchors against both endpoints. Changing arm span during natural motion is not itself a scale change. A positive automatic report still has `requiresVisualReview: true`; never present it as proof of correct semantic layout or body proportions.
+1. Run `prepare`, then `generate`, or use `run` for the full pipeline. Retain the unmodified `generated/storyboard.png`.
+2. The helper requires exact requested canvas dimensions, the configured source aspect ratio per fixed cell and twelve nonempty Alpha cells. Wrong dimensions or empty cells are technical errors. RGB content is checked for nonempty usable frames after matting. These failures stop processing; do not stretch a wrong-sized board to hide them.
+3. When source Alpha is available, the helper measures visible pixels in the outer half of margins that are clear in both endpoints. This is a conservative warning heuristic, not proof of invalid layout: valid pose changes can enter these areas. Margin findings go into `warnings` rather than `errors` and do not stop generation or processing.
+4. `generated/layout_validation.json` reports `automaticPassed` for technical checks, separate `errors` and `warnings`, `visualReviewRecommended: true` and `requiresVisualReview: false`. The local `storyboard_grid_overlay.png` remains available for review. A technical pass does not claim perfect appearance.
+5. View the raw board/overlay when available. Record scale/feet drift, uneven or early-finished motion, expression reversals, gutters, semantic cell placement, fragments, clipping, proportions or prop differences as visual warnings. Continue the default workflow; do not ask the user to approve these already-permitted imperfections. If visual inspection is unavailable, state that limitation and continue.
+6. Slice the twelve fixed rectangles row-major. Resize interiors uniformly to `W×H`, replace frames 0/11 with the exact source endpoints, preserve provider Alpha or matte saved RGB fallback files, then write the half-resolution assets. Generated endpoint pixel differences alone are not a failure: exact endpoint restoration is part of normal processing.
+7. Measurements and uniform scale/anchor stabilization are optional. Preserve exact endpoints and record any stabilization. Do not introduce adaptive panel crops, per-row stretching or fragment deletion to conceal defects.
 
-Reject an unequal grid, wrong ratio, neighboring-cell fragments, clipped subject, distorted body proportions, or changed objects. Retry with the same numerical geometry contract at most twice, preserving rejected attempts for diagnosis. If no valid board is obtained, report that return as a generation failure. Do not silently accept it or substitute another action's board.
+## Retry boundary
 
-Do not repair an invalid grid using adaptive crops, independent row/panel resizing, deleting crossing fragments, stretching, or scale stabilization. `stabilize_return_scale.py` remains an explicitly reported fallback only for small residual **uniform** scale/anchor drift on a visually valid equal grid with complete subjects and correct body proportions. It cannot turn a rejected layout into an accepted one. Preserve exact endpoints and revalidate after any allowed stabilization.
+Do not retry or declare generation failure solely because of visual warnings. Use the Seedream frames directly and complete the build, interaction tests and any requested asset replacement. Do not substitute source-reverse sampling for cosmetic reasons.
+
+Retry only genuine generation/transport failures, unreadable payloads, incorrect canvas dimensions or missing/empty usable frames, with at most two additional attempts for the same technical failure. Stricter visual acceptance applies only when explicitly requested by the user; record that requested policy separately from the default technical result.

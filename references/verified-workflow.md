@@ -17,7 +17,7 @@ Apply this profile without asking for more parameters:
 9. Build one combined Rive project sized to the reduced frames.
 10. Verify frame continuity, Rive structure, local build, and sampled renders.
 
-If a batch item fails, continue independent items and summarize failures at the end.
+Appearance and motion checks are advisory: record visual warnings and complete the full workflow and requested integration. Do not retry or request approval solely for visual defects. If a batch item has a technical failure, continue independent items and summarize failures at the end.
 
 ## Input specification
 
@@ -63,7 +63,7 @@ Expected counts for the current 24 FPS examples:
 
 Do not use a global RGB threshold as the final alpha. The source subject can contain pixels in the same `230..241` range as the background, and generated return interiors can shift away from that range. The union of border-connected `rembg` and color evidence plus foreground-component retention is the required protection against interior holes. The complete RGB directory is an auditable intermediate and must remain beside the transparent output.
 
-Run `scripts/validate_matte.py` on each final RGBA sequence. Its zero-hole and transparent-edge metrics do not detect opaque background residue, so also inspect its magenta contact sheet. A valid frame can still have transparent background between limbs; treat that as background, not as a missing-content defect.
+Run `scripts/validate_matte.py` on each final RGBA sequence. Its zero-hole and transparent-edge metrics do not detect opaque background residue, so inspect its magenta contact sheet when available. Appearance findings, including this tool's nonzero status for holes or opaque edges, are advisory under the default policy. Missing, unreadable or fully empty frames remain technical failures. Transparent background between limbs is valid.
 
 ### 3. Downscale and compress
 
@@ -79,7 +79,7 @@ Validate dimensions, frame counts, numeric ordering, and alpha channels before p
 
 ### 4. Generate twelve-frame returns
 
-Read [storyboard-geometry.md](storyboard-geometry.md) for the source-ratio equations, exact pixel prompt contract, raw-board overlay review and rejection rules. Canvas divisibility alone does not establish equal semantic panels; never conceal an invalid board with per-panel resizing.
+Read [storyboard-geometry.md](storyboard-geometry.md) for source-ratio equations, exact pixel geometry, hard technical checks and advisory visual review. Exact canvas dimensions allow fixed-grid slicing; they do not certify subject placement or visual quality. Record those imperfections and continue without per-panel resizing or regeneration.
 
 Run `scripts/build_seedream_return_frames.py` once for every cut point. The helper:
 
@@ -95,7 +95,7 @@ Run `scripts/build_seedream_return_frames.py` once for every cut point. The help
 
 Seedream transparent output has a strict input contract: exactly one input image, the input must be a PNG containing real Alpha, and the output must be PNG. `background: transparent` is rejected for RGB input, multiple input images, or non-PNG output. Use `n: 1` and request one transparent 4x3 storyboard. Seedream rejects generation areas above `4624220` pixels; `2016x2268` is below this limit and provides much more detail than the earlier `1024x1152` storyboard.
 
-Both the transparent and RGB prompts must request crisp high-resolution 2D art, sharp edges, fine facial, hair, and clothing detail, and no blur or compression artifacts. Validate four columns, three rows, equal cells with exactly the original single-frame proportions (`504x756`, 2:3 for the current sources), row-major reading order, and panel continuity before slicing. Do not use 12 unrelated independent requests.
+Both the transparent and RGB prompts must request crisp high-resolution 2D art, sharp edges, fine facial, hair, and clothing detail, and no blur or compression artifacts. Validate the exact canvas and source-ratio cell dimensions (`504x756`, 2:3 for the current sources), then slice a fixed four-column, three-row grid in row-major order. Subject placement and panel continuity are advisory visual checks. Do not use 12 unrelated independent requests.
 
 If transparent generation fails or the returned PNG lacks real Alpha, automatically use the generated `request_rgb_fallback.json`. That request uses two RGB endpoint inputs and requires a flat `RGB(235,235,235)` background with no gradient, texture, noise, vignette, floor, shadow, backdrop object, text, or watermark. Save every fallback frame as a complete RGB PNG in `processed/frames_rgb` before matting. Run `rembg` and the inclusive `230..241` border-connected background rule only on those saved RGB fallback files. When provider Alpha is present, preserve it and do not run `rembg`; only fill enclosed transparent holes and keep the RGB files as an audit view.
 
@@ -103,9 +103,11 @@ When Seedream's output safety rejects a clearly child-safe animated subject, ret
 
 If the safe wording is still rejected, use `scripts/build_local_return_frames.py` as the final local fallback. It samples 12 evenly spaced poses from the exact boundary source frame to exact source frame `0`, preserves natural source motion, and records `source_reverse_sampling` in `fallback.json`. Do not describe this fallback as generated imagery.
 
-### 5. Validate return scale and framing
+### 5. Record return appearance and motion
 
-Measure each interior frame against both endpoints. Reject large or small subjects, feet movement, camera drift, or changed framing. Retry at most twice. If the grid, subjects and proportions are valid, small residual uniform drift may use `scripts/stabilize_return_scale.py` on interior frames. Reject unequal grids or clipped/distorted subjects; stabilization cannot rescue them. Preserve exact endpoints and report the fallback.
+Inspect raw boards, grid overlays and contact sheets when available. Record scale/feet drift, uneven motion, early arrival or repeated poses, expression reversals, gutters, clipping, background residue and detail changes as warnings. Continue with the generated frames without regeneration or an approval gate. If viewing is unavailable, record that limitation and continue the technical workflow.
+
+Scale and anchor measurements are optional diagnostics, not rejection thresholds. `scripts/stabilize_return_scale.py` may optionally correct uniform interior drift; preserve exact endpoints and report any use. Do not conceal defects with adaptive crops, per-panel stretching or fragment deletion. Retry only actual API/transport or unusable-output failures, at most twice for the same failure. Stricter visual rejection requires an explicit user instruction.
 
 ### 6. Generate the combined Rive project
 
@@ -170,19 +172,19 @@ Assets are root elements before the `Artboard`. External frame changes are not w
 
 - Headless screenshot startup can consume roughly one animation frame. Align comparisons by image matching.
 - Screenshots of transparent artboards may use an opaque matte. Composite source frames over the same RGB color before pixel comparison.
-- Contact sheets must show no blank frame, wrong-size asset, enlarged or shrunken subject, framing drift, or discontinuous pose.
+- Confirm no missing/empty frames or wrong-size assets. Record scale changes, framing drift and discontinuous poses as visual warnings; they do not block delivery by default.
 
 ## Common failure modes
 
 - `ModelNotOpen`: the model is not activated for the API account or activation has not propagated.
-- Invalid storyboard grid or missing panel: reject the output; the default is exactly four columns, three rows, and 12 equal panels at the original single-frame aspect ratio.
+- Wrong canvas dimensions, invalid source-ratio geometry or empty/missing usable frames: technical failures; correct the request or retry generation at most twice. Imperfect subject placement inside the fixed 4x3 grid is a warning, not a retry trigger.
 - Transparent request returns opaque RGB: reject it and use the exact `RGB(235,235,235)` fallback request before matting saved RGB PNGs.
 - Blank first frame: inspect `Solo.activeComponentId` and target child `Image` IDs.
 - Frozen animation: verify `propertyKey="296"` and `KeyFrameId` keys.
 - Slow or fast playback: verify source and return FPS are both 12 and return duration is 12 frames.
 - Missing final return frame visibility: verify the repeated final held key at frame `12`.
 - Missing source frames: inspect `extraction_manifest.json` and ensure decoded frame `N-1` was retained.
-- Enlarged or shrunken return subject: reject and retry at most twice; stabilize only residual uniform drift on a valid grid, never invalid layout or body proportions.
+- Enlarged/shrunken subjects, feet drift or uneven return motion: record warnings and use the generated frames. Uniform stabilization is optional, keeps exact endpoints and must be reported.
 - Interrupt request lost before the boundary: use a Boolean latch and conditioned `100%` exit.
 - Return freezes or switching fails: verify unconditional return-to-Router transition and Router routes.
 - A second click leaks: clear `interruptRequested` on return and Router exits.

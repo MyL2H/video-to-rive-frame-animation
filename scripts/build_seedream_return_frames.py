@@ -454,7 +454,7 @@ def file_alpha_info(path: Path) -> dict[str, object]:
         }
 
 
-def validate_saved_storyboard(args: argparse.Namespace, path: Path, spec: dict) -> None:
+def validate_saved_storyboard(args: argparse.Namespace, path: Path, spec: dict) -> dict:
     endpoints = None
     if args.source_rgba_dir:
         endpoints = [Image.open(p).convert('RGBA') for p in source_rgba_endpoints(args)]
@@ -465,6 +465,11 @@ def validate_saved_storyboard(args: argparse.Namespace, path: Path, spec: dict) 
     if not report['automaticPassed']:
         raise ValueError('Storyboard geometry rejected; do not slice, stretch or stabilize it: '
                          + '; '.join(report['errors']))
+    if report['warnings']:
+        print(f'Warning: {len(report["warnings"])} storyboard margin checks reported drift; '
+              f'continuing with fixed-grid slices. Details: {path.with_name("layout_validation.json")}',
+              file=sys.stderr)
+    return report
 
 
 def generate(args: argparse.Namespace) -> Path:
@@ -598,10 +603,11 @@ def generate(args: argparse.Namespace) -> Path:
 def process(args: argparse.Namespace) -> Path:
     boundary_dir = args.boundary_dir(args)
     generated = boundary_dir / "generated"
+    layout_report = None
     if (generated / 'storyboard.png').is_file():
         request_body = json.loads((boundary_dir / 'request.json').read_text())
         spec = layout(tuple(args.storyboard_geometry['sourceSize']), request_body['size'])
-        validate_saved_storyboard(args, generated / 'storyboard.png', spec)
+        layout_report = validate_saved_storyboard(args, generated / 'storyboard.png', spec)
     generated_paths = sorted(generated.glob("frame_*.png"))
     if len(generated_paths) != RETURN_FRAME_COUNT:
         raise ValueError(
@@ -707,6 +713,8 @@ def process(args: argparse.Namespace) -> Path:
     resampling = getattr(Image, "Resampling", Image)
     for source_path in sorted(rgba_dir.glob("*.png")):
         with Image.open(source_path) as source:
+            if source.convert("RGBA").getchannel("A").point(lambda value: 255 if value > 8 else 0).getbbox() is None:
+                raise ValueError(f'Processed frame has no visible subject: {source_path.name}')
             frame = source.convert("RGBA").resize(size, resampling.LANCZOS)
         rgba = np.asarray(frame).copy()
         rgba[:, :, 3] = fill_enclosed_transparent(rgba[:, :, 3])
@@ -733,6 +741,7 @@ def process(args: argparse.Namespace) -> Path:
             "returnDurationFrames": RETURN_FRAME_COUNT,
             "returnDurationSeconds": 1,
             "endpointPolicy": endpoint_policy,
+            "layoutValidation": layout_report,
             "generationMode": (
                 "source-reverse-sampling"
                 if fallback
@@ -772,7 +781,7 @@ def process(args: argparse.Namespace) -> Path:
             "interiorPolicy": (
                 "10 exact reverse-sampled source frames"
                 if fallback
-                else "10 Seedream frames; stabilize only when measured drift requires it"
+                else "10 Seedream frames; preserve generated poses and report visual quality warnings"
             ),
             "generationException": fallback,
             "webpQuality": args.webp_quality,

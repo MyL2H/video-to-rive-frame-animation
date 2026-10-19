@@ -1,4 +1,4 @@
-"""Source-aspect-ratio storyboard geometry and conservative seam checks."""
+"""Source-aspect-ratio storyboard geometry and advisory margin checks."""
 from __future__ import annotations
 
 import math
@@ -81,15 +81,20 @@ def prompt_contract(spec: dict) -> str:
 
 
 def validate_image(image: Image.Image, spec: dict, endpoints: list[Image.Image] | None = None) -> dict:
-    """Detect wrong dimensions, empty cells, and bleed into source-clear margins.
+    """Reject unusable geometry; record source-clear margin drift as warnings.
 
-    This is not a semantic grid/identity validator; a visual overlay review is mandatory.
+    This is not a semantic grid/identity validator. Visual review is advisory and
+    does not gate slicing or processing of a technically usable storyboard.
     RGB output defers content checks until after matting.
     """
     errors = []
+    warnings = []
+    review_policy = {'requiresVisualReview': False, 'visualReviewRecommended': True,
+                     'qualityPolicy': 'record warnings and continue'}
     if list(image.size) != spec['storyboardSize']:
         errors.append(f'Expected exact canvas {spec["storyboardSize"]}, got {list(image.size)}')
-        return {'automaticPassed': False, 'errors': errors, 'requiresVisualReview': True}
+        return {'automaticPassed': False, 'errors': errors, 'warnings': warnings,
+                'cells': [], **review_policy}
     rgba = np.asarray(image.convert('RGBA'))
     has_alpha = bool((rgba[:, :, 3] < 8).any())
     margins = None
@@ -114,8 +119,8 @@ def validate_image(image: Image.Image, spec: dict, endpoints: list[Image.Image] 
         if not visible:
             errors.append(f'Panel {i+1} is empty')
         if margins:
-            # The outer half of a margin clear in BOTH endpoints must stay clear.
-            # Allow pose motion within the inner half; never silently erase detected bleed.
+            # Measure drift into the outer half of margins clear in BOTH endpoints.
+            # Record it without rejecting, erasing, or repositioning generated content.
             bands = [int(margins[0]*cw/2), int(margins[1]*ch/2),
                      int(margins[2]*cw/2), int(margins[3]*ch/2)]
             counts = [int(a[:,:bands[0]].sum()) if bands[0] else 0,
@@ -124,11 +129,11 @@ def validate_image(image: Image.Image, spec: dict, endpoints: list[Image.Image] 
                       int(a[ch-bands[3]:,:].sum()) if bands[3] else 0]
             item['outerMarginVisiblePixels'] = counts
             if any(counts):
-                errors.append(f'Panel {i+1} has pixels in source-clear outer margins: {counts}')
+                warnings.append(f'Panel {i+1} has pixels in source-clear outer margins: {counts}')
         cells.append(item)
-    return {'automaticPassed': not errors, 'errors': errors, 'cells': cells,
-            'contentCheck': 'source-clear margins' if has_alpha and margins else 'visual review required',
-            'requiresVisualReview': True}
+    return {'automaticPassed': not errors, 'errors': errors, 'warnings': warnings, 'cells': cells,
+            'contentCheck': 'source-clear margin warnings' if has_alpha and margins else 'visual review recommended',
+            **review_policy}
 
 
 def grid_overlay(image: Image.Image, spec: dict) -> Image.Image:

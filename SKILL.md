@@ -17,6 +17,16 @@ When the user supplies only one or more video files, treat this as the complete 
 
 Do not ask for dimensions, quality, FPS, frame count, return duration, cut points, state-machine names, or output paths. Apply the profile below to every input and combine the actions into one Rive project.
 
+## Default acceptance and retry policy
+
+Complete the full generation, processing, Rive build and requested integration by default. Keep requesting good artwork, but treat appearance and motion checks as advisory rather than delivery gates.
+
+- Record scale changes, feet/anchor drift, uneven motion, early arrival/holds, expression reversals, visible grid lines/gutters, background residue, imperfect semantic panel placement, clipping, or prop/detail differences as visual warnings. If the storyboard can be decoded and sliced into twelve usable frames, continue with it. Do not regenerate, stop, ask for approval, or switch to source-reverse sampling solely for these warnings.
+- Keep hard technical checks: valid source-ratio canvas geometry, exact requested image dimensions, twelve nonempty frame files, correct RGBA/optimized dimensions, exact replaced source endpoints, 12 FPS, one-second returns, successful Rive build and working interruption/routing. Similar or repeated poses are not missing frames. A generated endpoint differing from its reference is expected to be corrected by endpoint replacement; it is not a standalone failure.
+- Retry only an actual API/transport failure, unreadable/missing response, wrong canvas dimensions, or missing/empty usable frames. Preserve failed attempts; allow at most two additional attempts for the same technical failure. Authentication/model-availability errors require fixing their cause rather than blind retries. Preserve the transparent-to-RGB and child-safe prompt fallback paths below.
+- Inspect raw boards, overlays and contact sheets when available and record what was actually inspected. A visual review is not a pause or approval gate. If viewing is unavailable, record that limitation and continue the technical workflow. Optional uniform stabilization may improve an otherwise usable result, but it is not required for delivery and must keep exact endpoints.
+- Apply stricter visual rejection/regeneration only when the user explicitly requests it. Do not invent percentage or pixel thresholds that block the default workflow. When continuing a run, reevaluate existing raw boards under this policy before making further generation calls.
+
 ## Default profile
 
 - Play every source and return timeline at exactly `12 FPS`.
@@ -31,12 +41,12 @@ Do not ask for dimensions, quality, FPS, frame count, return duration, cut point
 - Derive a strict equal 4x3 storyboard from the **single source frame aspect ratio**. For 512x768 sources, use a 2016x2268 canvas with twelve exactly 504x756 cells (2:3 each), with boundaries x=[0,504,1008,1512,2016], y=[0,756,1512,2268]. Other source ratios require different dimensions; never hardcode 2:3 or stretch to fit. Keep the total area at or below 4624220 pixels. Both prompt paths must include exact canvas, cell, coordinate and uniform-scale constraints. Read [references/storyboard-geometry.md](references/storyboard-geometry.md) before generation.
 - When transparent generation fails or its output has no real Alpha, automatically retry with two RGB endpoint inputs and require the entire background to be exactly flat `RGB(235,235,235)` with no gradient, texture, shadow, floor, text, or watermark. Save the complete RGB PNG frames first, then matte saved files with border-connected `rembg` evidence and the inclusive `230..241` background range.
 - Both prompt paths must request crisp high-resolution 2D art with sharp edges and fine facial, hair, and clothing detail, explicitly excluding blur and compression artifacts. Do not generate 12 unrelated images independently; use the single 4x3 storyboard as the default coherent layout.
-- Require natural, evenly spaced motion and consistent identity, face, clothing, body proportions, subject size, feet anchor, screen position, style, lighting, camera, framing, and background. Reject zoom, shrink, enlarge, crop, reframe, drift, morphing, object changes, text, watermark, or cuts.
+- Prompt for natural, evenly spaced motion and consistent identity, face, clothing, body proportions, subject size, feet anchor, screen position, style, lighting, camera, framing, and background. Record deviations as visual warnings and continue under the default acceptance policy.
 - If Seedream's output safety rejects a child-safe animated subject, retry with explicit non-sensitive constraints such as fully clothed, child-friendly, and no violence or adult themes. Do not loosen the identity, timing, endpoint, scale, or framing constraints.
 - If output safety still rejects a storyboard after safe-prompt retries, build the return with `scripts/build_local_return_frames.py`, sampling source motion in reverse at 12 evenly spaced poses including both exact endpoints. Mark `source_reverse_sampling` as a generation exception; never present it as Seedream output.
 - Replace generated frames `0` and `11` with the exact source endpoints. Do not cross-fade the endpoints.
-- Play the 12 unique return images at `12 FPS`. Hold the final image through the end of the one-second timeline by repeating its held key at Rive frame `12`.
-- Inspect the raw storyboard and its exact-grid overlay before processing or replacing endpoints. Reject unequal cells, wrong source proportions, cross-cell fragments, clipping, or changed objects; retry at most twice, then report generation failure. Do not repair rejected layouts by cropping, stretching, deleting fragments, or stabilizing. Only small residual uniform scale/anchor drift on a valid equal grid may use `scripts/stabilize_return_scale.py`; keep endpoints exact and report that fallback.
+- Play the 12 ordered return frame files at `12 FPS`; similar or repeated poses are allowed. Hold the final image through the end of the one-second timeline by repeating its held key at Rive frame `12`.
+- Retain the raw storyboard and exact-grid overlay for review. Use the fixed 4x3 slicing geometry even if the generated subjects are imperfectly positioned; report visual defects without a regeneration loop. Do not conceal defects with adaptive crops, per-panel stretching or fragment deletion. `scripts/stabilize_return_scale.py` is optional for uniform drift; preserve exact endpoints and report any use.
 - Build one Rive CLI project containing all logical actions, their forward segments, all return timelines, and the routing state machine.
 - Run structural checks, a local build, and sampled pointer-driven renders before reporting completion.
 - Preserve source files and put derived files in new directories.
@@ -95,7 +105,7 @@ Read credentials from a local environment file or process environment. Accept `A
      --contact-sheet <stem>_frames_12fps/matte_contact_sheet.jpg
    ```
 
-   `validate_matte.py` fails on opaque frame edges or enclosed transparent holes. Its magenta contact sheet is still required because those metrics cannot identify every opaque background residue. Transparent background visible between separate limbs is valid.
+   `validate_matte.py` reports a nonzero exit status for opaque frame edges or enclosed transparent holes. Preserve its metrics and magenta contact sheet. Treat these appearance findings as warnings under the default policy, not as a reason to regenerate or stop an otherwise usable sequence. Missing, unreadable or fully empty frames remain technical failures. Transparent background visible between separate limbs is valid.
 
 4. Calculate cut-point frames as specified in [references/interruptible-multi-action.md](references/interruptible-multi-action.md). Generate and process 12 return images for every cut point:
 
@@ -103,19 +113,16 @@ Read credentials from a local environment file or process environment. Accept `A
    python scripts/build_seedream_return_frames.py \
      --video input.mp4 --output-root <stem>_seedream_returns \
      --boundary-frame <source-frame> --target-fps 12 \
-     --source-rgba-dir <stem>_frames_12fps prepare
-   # Repeat the same arguments with generate. Inspect storyboard.png and
-   # storyboard_grid_overlay.png before repeating them with process.
+     --source-rgba-dir <stem>_frames_12fps run
+   # For an existing run, use prepare/generate/process separately as needed
+   # to reuse saved outputs without unnecessary generation calls.
    ```
 
-   The default `auto` mode first requests a single high-resolution transparent storyboard with dimensions derived from the source ratio. Follow the strict acceptance gate in [references/storyboard-geometry.md](references/storyboard-geometry.md): exact dimensions and source-clear-margin checks run automatically; all twelve cells still require visual review before processing. The `run` shortcut cannot perform that visual review and must not be treated as acceptance. Preserve verified provider Alpha without running `rembg`. If the request fails or the returned PNG has no real Alpha, the same run retries with the exact `RGB(235,235,235)` fallback prompt. For that fallback only, write complete `frames_rgb` PNGs first and matte the saved RGB files using border-connected `rembg` background, the `230..241` range, and hole repair. Replace endpoints with exact source RGBA frames and write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same numerical geometry contract. Invalid grids or distorted proportions remain rejected. Only for residual uniform drift on an otherwise accepted grid, run:
+   The default `auto` mode first requests a transparent storyboard with dimensions derived from the source ratio. [references/storyboard-geometry.md](references/storyboard-geometry.md) separates hard geometry errors from advisory source-clear-margin warnings. `generate` and `process` continue when only warnings are present; `run` can perform the full pipeline without a manual acceptance gate. Keep the raw board/overlay and review them when available, recording concerns or review limitations without blocking delivery.
 
-   ```bash
-   python scripts/stabilize_return_scale.py \
-     --return-root <stem>_seedream_returns --replace
-   ```
+   Preserve verified provider Alpha without running `rembg`. If the transparent request fails or the returned PNG has no real Alpha, use the `RGB(235,235,235)` fallback request. For that fallback only, write complete `frames_rgb` PNGs first and matte saved files with border-connected `rembg`, the `230..241` range and hole repair. Visible gutters, background variation or motion defects are warning-level findings; continue ordinary fixed-grid slicing and matting. Replace endpoints with exact source RGBA frames and write 50% PNG/WebP derivatives.
 
-   Use `processed_stabilized/frames_50_webp` only when stabilization was required and report the fallback. Never alter the exact endpoints.
+   Scale/anchor measurements and `scripts/stabilize_return_scale.py` are optional diagnostics/improvements, not delivery gates. If stabilization is used, reference `processed/processed_stabilized/frames_50_webp`, preserve the exact endpoints and report it. Otherwise use `processed/frames_50_webp` directly.
 
 5. Create one Rive CLI project, write a multi-action manifest, and build its RML:
 
@@ -144,7 +151,7 @@ Read [references/interruptible-multi-action.md](references/interruptible-multi-a
 - Use all whole-second source boundaries strictly before the decoded end, then always append source frame `N-1`.
 - Map every source boundary to its retained 12 FPS timeline frame.
 - If an interruption is requested at time `t`, continue the current action to the smallest configured boundary at or after `t`.
-- Each return contains exactly 12 unique images and runs for exactly `1s` at `12 FPS`.
+- Each return contains exactly 12 ordered frame files and runs for exactly `1s` at `12 FPS`; repeated poses do not change this timing.
 - The return's first frame is the exact source boundary frame and its last frame is exact source frame `0`.
 - After the return, enter the action selected by `nextAction`; use action `0` by default.
 - When switching from action A to action B, set `nextAction` to B's zero-based index before requesting the interruption.
@@ -178,7 +185,7 @@ For each input stem:
     response.json                        sanitized provider response
     generated/                           raw storyboard and 12 fixed-grid slices
       storyboard_grid_overlay.png        local-only exact-grid review overlay
-      layout_validation.json             automated geometry checks; visual review still required
+      layout_validation.json             hard geometry errors plus advisory visual warnings
     processed/
       frames_rgb/                        complete RGB audit PNGs, including RGB fallbacks
       frames_rgba/                       provider Alpha or matted full-resolution frames
@@ -201,6 +208,6 @@ For all inputs together:
   build/<name>_multi_action_rive.riv      self-contained built Rive file
 ```
 
-The final report lists every source video and its dimensions, source FPS, decoded frame count, 12 FPS retained frame count, cut points, generated return counts, PNG/WebP sizes, combined `.riv` path, and any scale, framing, generation, or visual-check exception.
+The final report lists every source video and its dimensions, source FPS, decoded frame count, 12 FPS retained frame count, cut points, generated return counts, PNG/WebP sizes, combined `.riv` path, and any scale, framing, generation, stabilization or visual-review warnings. Distinguish technical failures from accepted visual imperfections and unreviewed material.
 
 Do not claim completion from `--verify` alone. Structural verification and rendered interaction checks are both required.
