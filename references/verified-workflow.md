@@ -12,7 +12,7 @@ Apply this profile without asking for more parameters:
 4. Produce transparent full-resolution PNG frames.
 5. Resize to 50% with Lanczos.
 6. Produce optimized PNG and RGBA WebP at quality 82 and method 6.
-7. Generate exactly 12 Seedream return images for every whole-second and end-of-media cut point.
+7. Generate one high-resolution Seedream return storyboard for every whole-second and end-of-media cut point and slice exactly 12 ordered frames from it.
 8. Replace generated return endpoints with exact source frames.
 9. Build one combined Rive project sized to the reduced frames.
 10. Verify frame continuity, Rive structure, local build, and sampled renders.
@@ -82,16 +82,20 @@ Validate dimensions, frame counts, numeric ordering, and alpha channels before p
 Run `scripts/build_seedream_return_frames.py` once for every cut point. The helper:
 
 - saves exact source endpoints;
-- creates a strict fixed-scale Seedream request;
-- uses a `1024x1536` canvas for the current `2:3` sources because Seedream rejects image areas below `921600` pixels;
+- creates one transparent RGBA reference containing the boundary pose and source first pose side by side;
+- requests one `2016x2268` transparent PNG storyboard, producing twelve `504x756` 2:3 cells with no gutters or labels;
 - resizes generated interior images to the source dimensions before endpoint replacement;
-- requires 12 returned images;
+- slices the 4x3 storyboard row-major and requires exactly 12 frames;
 - stores remote URL-free sanitized response metadata;
 - replaces frames `0` and `11` with exact endpoints;
-- mattes and optimizes all 12 frames;
+- preserves verified provider Alpha, or mattes only the RGB fallback frames, then optimizes all 12 frames;
 - reports 12 FPS and one-second return timing.
 
-Do not use 12 unrelated independent image requests when one multi-image request or a 4x3 storyboard can provide coherent ordering. If a storyboard fallback is used, request `1024x1152` for 12 equal `256x384` cells, validate four columns, three rows, equal cell sizes, row-major reading order, and panel continuity before slicing.
+Seedream transparent output has a strict input contract: exactly one input image, the input must be a PNG containing real Alpha, and the output must be PNG. `background: transparent` is rejected for RGB input, multiple input images, or non-PNG output. Use `n: 1` and request one transparent 4x3 storyboard. Seedream rejects generation areas above `4624220` pixels; `2016x2268` is below this limit and provides much more detail than the earlier `1024x1152` storyboard.
+
+Both the transparent and RGB prompts must request crisp high-resolution 2D art, sharp edges, fine facial, hair, and clothing detail, and no blur or compression artifacts. Validate four columns, three rows, equal `504x756` cells, 2:3 proportions, row-major reading order, and panel continuity before slicing. Do not use 12 unrelated independent requests.
+
+If transparent generation fails or the returned PNG lacks real Alpha, automatically use the generated `request_rgb_fallback.json`. That request uses two RGB endpoint inputs and requires a flat `RGB(235,235,235)` background with no gradient, texture, noise, vignette, floor, shadow, backdrop object, text, or watermark. Save every fallback frame as a complete RGB PNG in `processed/frames_rgb` before matting. Run `rembg` and the inclusive `230..241` border-connected background rule only on those saved RGB fallback files. When provider Alpha is present, preserve it and do not run `rembg`; only fill enclosed transparent holes and keep the RGB files as an audit view.
 
 When Seedream's output safety rejects a clearly child-safe animated subject, retry with explicit non-sensitive wording such as fully clothed, child-friendly, and no nudity, violence, injury, weapons, or adult themes. Keep every temporal, identity, endpoint, scale, and framing requirement unchanged.
 
@@ -169,7 +173,8 @@ Assets are root elements before the `Artboard`. External frame changes are not w
 ## Common failure modes
 
 - `ModelNotOpen`: the model is not activated for the API account or activation has not propagated.
-- Wrong return image count: reject and use the documented storyboard fallback only when supported.
+- Invalid storyboard grid or missing panel: reject the output; the default is exactly four columns, three rows, and 12 equal 2:3 panels.
+- Transparent request returns opaque RGB: reject it and use the exact `RGB(235,235,235)` fallback request before matting saved RGB PNGs.
 - Blank first frame: inspect `Solo.activeComponentId` and target child `Image` IDs.
 - Frozen animation: verify `propertyKey="296"` and `KeyFrameId` keys.
 - Slow or fast playback: verify source and return FPS are both 12 and return duration is 12 frames.

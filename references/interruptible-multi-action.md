@@ -42,15 +42,17 @@ For every boundary:
 
 1. Save the exact RGB source boundary frame as `inputs/first_frame.png`.
 2. Save exact source frame `0` as `inputs/last_frame.png`.
-3. Send one `doubao-seedream-5-0-pro-260628` request that returns exactly 12 separate ordered images. Use a canvas of at least `921600` pixels; for a `2:3` source use `1024x1536` and resize generated interiors back to the source dimensions.
+3. Build one transparent RGBA reference containing the two endpoints side by side, then send one `doubao-seedream-5-0-pro-260628` request for a `2016x2268` transparent PNG 4x3 storyboard. Use `background: transparent`, `output_format: png`, and `n: 1`. Slice twelve equal `504x756` 2:3 cells row-major and resize generated interiors back to the source dimensions.
 4. Require the complete natural return motion from the boundary pose to the first-frame pose across those 12 images.
 5. Preserve the subject's identity, face, clothing, body proportions, overall size, feet anchor, screen position, style, lighting, camera, framing, and background.
 6. Reject zoom, shrink, enlarge, crop, reframe, drift, morphing, object changes, text, watermark, and cuts.
-7. Replace generated frame `0` with `first_frame.png` and generated frame `11` with `last_frame.png`.
-8. Keep the 12 complete RGB PNG frames in `processed/frames_rgb`, run the same border-connected RGB matte and transparent-hole repair as source frames, then downscale and write PNG/WebP derivatives. Do not matte directly from generated in-memory pixels.
+7. Replace generated frame `0` and frame `11` with the exact source RGBA endpoints mapped by `extraction_manifest.json`.
+8. When generated frames contain real provider Alpha, preserve that Alpha and fill enclosed transparent holes without running `rembg`. For the RGB fallback only, keep complete RGB PNG frames in `processed/frames_rgb` first, then run the same border-connected RGB matte and transparent-hole repair as source frames. Downscale and write PNG/WebP derivatives afterward.
 9. Measure interior scale and framing against both exact endpoints. Retry at most twice. If rejected drift remains, run `scripts/stabilize_return_scale.py` on interior frames only and report the fallback.
 
-Seedream is an image model. Independent per-frame calls can drift and must be avoided when a single multi-image request or a single 4x3 storyboard is available. If the API can return only one image, request an ordered 4x3 storyboard with 12 equal 2:3 cells, using `1024x1152` so each cell is `256x384`; verify the grid and row-major ordering, then slice it into 12 images. Report that generation fallback.
+Seedream transparent generation accepts exactly one input PNG containing real Alpha and rejects RGB inputs, multiple inputs, and non-PNG output. The default request therefore uses one left/right RGBA endpoint reference and returns one transparent 4x3 storyboard. Seedream also rejects generation areas above `4624220` pixels. Use `2016x2268` for the default high-resolution layout and require sharp edges, fine detail, and no blur or compression artifacts.
+
+Independent per-frame calls can drift and must be avoided. If transparent generation fails or the output lacks real Alpha, automatically retry with `request_rgb_fallback.json`: two RGB endpoint inputs, one `2016x2268` 4x3 storyboard, and an exact flat `RGB(235,235,235)` background with no gradient, texture, noise, vignette, floor, shadow, backdrop object, text, or watermark. Save complete RGB PNGs before using border-connected `rembg` and the inclusive `230..241` color rule. Report the mode actually used.
 
 If Seedream output safety rejects the storyboard after non-sensitive prompt mitigation, use `scripts/build_local_return_frames.py` to sample the exact source motion in reverse at 12 evenly spaced poses. Record `source_reverse_sampling` as an exception and preserve the same return timing and exact endpoints.
 
@@ -167,7 +169,8 @@ Also verify:
 ## Common failures
 
 - `ModelNotOpen`: activate `doubao-seedream-5-0-pro-260628` for the API account and retry after activation propagates.
-- Fewer or more than 12 images: reject the response. Use the 4x3 storyboard fallback only when separate multi-image output is unavailable.
+- Invalid storyboard grid, cell ratio, or panel count: reject the response and retry the same strict request. The required result is one 4x3 storyboard with 12 equal 2:3 panels.
+- Transparent request returns opaque RGB: reject it and use the exact `RGB(235,235,235)` fallback request, then matte only saved RGB PNG frames.
 - Subject enlarges or shrinks during a return: reject and regenerate with the strict scale and framing prompt. After two retries, stabilize interior frames and report the fallback.
 - Return starts early after a click: keep the original segment active and use a Boolean condition at its `100%` exit.
 - Return freezes on its endpoint: use the unconditional return-to-Router transition.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import os
 import re
@@ -33,33 +34,49 @@ RETURN_FPS = 12
 RETURN_FRAME_COUNT = 12
 STORYBOARD_COLUMNS = 4
 STORYBOARD_ROWS = 3
-STORYBOARD_SIZE = "1024x1152"
-DEFAULT_RETURN_PROMPT = (
-    "Create exactly 12 ordered animation frames as 12 separate images. Frame 1 must "
-    "match the first reference pose and frame 12 must match the second reference pose. "
-    "Build one smooth, natural return motion from the first reference pose to the second "
-    "reference pose with even motion spacing. Preserve the same character identity, "
-    "facial features, clothing, body proportions, subject height, torso width, feet "
-    "anchor, screen position, artistic style, lighting, and background in every frame. "
-    "Use a fixed camera and fixed framing. Do not zoom, resize, crop, reframe, drift, "
-    "morph, add objects, remove objects, change text, add text, add a watermark, or cut. "
-    "The 12 images must read as consecutive animation frames at 12 frames per second."
+STORYBOARD_SIZE = "2016x2268"
+RGB_FALLBACK_COLOR = 235
+DEFAULT_TRANSPARENT_STORYBOARD_PROMPT = (
+    "The input is one transparent PNG containing exactly two side-by-side endpoint "
+    "references: the left panel is the first pose and the right panel is the final pose. "
+    "Return exactly one high-resolution transparent PNG animation storyboard with exactly "
+    "4 columns and 3 rows, for 12 equal 2:3 rectangular panels and no gutters, borders, "
+    "captions, labels, or watermark. Read panels left to right and top to bottom. Panel 1 "
+    "must match the left input pose and panel 12 must match the right input pose. Build one "
+    "smooth, natural return motion with evenly spaced poses. Preserve the same fully clothed, "
+    "child-friendly cartoon character identity, face, clothing, body proportions, subject "
+    "height, torso width, feet anchor, screen position, art style, lighting, camera, framing, "
+    "and transparent alpha background in every panel. Use crisp high-resolution 2D animation "
+    "art, clean detailed line work, sharp edges, fine facial and clothing detail, and no blur "
+    "or compression artifacts. Do not zoom, crop, reframe, drift, morph, add objects, remove "
+    "objects, or change the background."
 )
-DEFAULT_STORYBOARD_PROMPT = (
-    "Create one ordered animation storyboard containing exactly 4 columns and 3 rows, "
-    "for 12 equal rectangular panels in total. Each panel is a 2:3 portrait animation "
-    "of a fully clothed, child-friendly cartoon character with no nudity, sexual "
-    "content, violence, injury, weapons, or adult themes. "
-    "frame with no gutters, borders, captions, labels, or watermark. Read panels from "
-    "left to right and top to bottom. Panel 1 must match the first reference pose and "
-    "panel 12 must match the second reference pose. Build one smooth, natural return "
-    "motion from the first reference pose to the second reference pose with even motion "
-    "spacing. Preserve the same character identity, facial features, clothing, body "
-    "proportions, subject height, torso width, feet anchor, screen position, artistic "
-    "style, lighting, camera, framing, and background in every panel. Do not zoom, "
-    "resize, crop, reframe, drift, morph, add objects, remove objects, change text, add "
-    "text, add a watermark, or cut. The 12 panels must read as consecutive animation "
-    "frames at 12 frames per second."
+DEFAULT_RGB_STORYBOARD_PROMPT = (
+    "Return exactly one high-resolution animation storyboard containing 4 columns and 3 "
+    "rows, for 12 equal 2:3 rectangular panels. Read panels left to right and top to bottom. "
+    "Panel 1 must match the first input pose and panel 12 must match the second input pose. "
+    "Build one smooth, natural return motion with evenly spaced poses. Preserve the same "
+    "fully clothed, child-friendly cartoon character identity, face, clothing, body "
+    "proportions, subject height, torso width, feet anchor, screen position, art style, "
+    "lighting, camera, framing, and scale. The entire background of every panel must be one "
+    "exact flat RGB(235,235,235) color with no gradient, texture, noise, vignette, floor, "
+    "shadow, backdrop object, text, or watermark. Use crisp high-resolution 2D animation art, "
+    "clean detailed line work, sharp edges, fine facial and clothing detail, and no blur or "
+    "compression artifacts. Do not zoom, crop, reframe, drift, morph, add objects, or remove "
+    "objects."
+)
+DEFAULT_RGB_SEPARATE_PROMPT = (
+    "Return exactly 12 separate high-resolution images in chronological order. Build one "
+    "smooth, natural return motion with evenly spaced poses. The first image must match the "
+    "first input pose and the last image must match the second input pose. Preserve the same "
+    "fully clothed, child-friendly cartoon character identity, face, clothing, body "
+    "proportions, subject height, torso width, feet anchor, screen position, art style, "
+    "lighting, camera, framing, and scale. The entire background of every image must be one "
+    "exact flat RGB(235,235,235) color with no gradient, texture, noise, vignette, floor, "
+    "shadow, backdrop object, text, or watermark. Use crisp high-resolution 2D animation art, "
+    "clean detailed line work, sharp edges, fine facial and clothing detail, and no blur or "
+    "compression artifacts. Do not zoom, crop, reframe, drift, morph, add objects, or remove "
+    "objects."
 )
 
 
@@ -72,8 +89,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--env-file", type=Path, default=Path(".env.seedance"))
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--prompt")
-    parser.add_argument("--size", default="1024x1536")
-    parser.add_argument("--storyboard", action="store_true")
+    parser.add_argument("--size", default="1536x2304")
+    parser.add_argument(
+        "--generation-mode",
+        choices=("auto", "transparent-storyboard", "rgb-storyboard", "separate"),
+        default="auto",
+    )
+    parser.add_argument("--storyboard", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--storyboard-size", default=STORYBOARD_SIZE)
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--scale", type=float, default=0.5)
@@ -90,6 +112,11 @@ def parse_args() -> argparse.Namespace:
         "command", choices=("prepare", "generate", "process", "run")
     )
     args = parser.parse_args()
+
+    if args.storyboard and args.generation_mode == "auto":
+        args.generation_mode = "transparent-storyboard"
+    if args.generation_mode == "auto":
+        args.generation_mode = "transparent-storyboard"
 
     if args.target_fps != RETURN_FPS:
         raise ValueError(f"Return sequences must use exactly {RETURN_FPS} FPS")
@@ -174,11 +201,36 @@ def read_rgb(path: Path) -> Image.Image:
     return Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)).convert("RGB")
 
 
-def image_data_url(path: Path) -> str:
+def image_data_url(path: Path, preserve_alpha: bool = False) -> str:
     with Image.open(path) as image:
-        image.convert("RGB").save(path, format="PNG", optimize=True)
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        output = io.BytesIO()
+        image.convert("RGBA" if preserve_alpha else "RGB").save(
+            output, format="PNG", optimize=True
+        )
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def source_rgba_endpoints(args: argparse.Namespace) -> tuple[Path, Path]:
+    if args.source_rgba_dir is None:
+        raise ValueError("--source-rgba-dir is required for transparent generation")
+    frames = sorted(args.source_rgba_dir.glob("frame_*.png"))
+    if not frames:
+        raise ValueError(f"No source RGBA frames found in {args.source_rgba_dir}")
+    manifest_path = args.source_rgba_dir / "extraction_manifest.json"
+    if manifest_path.is_file():
+        mapped = {
+            item["sourceFrame"]: item["outputFrame"]
+            for item in json.loads(manifest_path.read_text())["frameMap"]
+        }
+        boundary_index = mapped[args.boundary_frame]
+    else:
+        boundary_index = int(
+            args.boundary_frame * args.target_fps / args.source_fps + 0.5
+        )
+    if boundary_index >= len(frames):
+        raise ValueError("Source RGBA directory does not contain the boundary frame")
+    return frames[boundary_index], frames[0]
 
 
 def boundary_label(frame_index: int, fps: float, frame_count: int) -> int:
@@ -212,20 +264,71 @@ def prepare(args: argparse.Namespace) -> Path:
         last_path, format="PNG", optimize=True
     )
 
-    prompt = args.prompt or (
-        DEFAULT_STORYBOARD_PROMPT if args.storyboard else DEFAULT_RETURN_PROMPT
-    )
-    body = {
-        "model": args.model,
-        "prompt": prompt,
-        "image": [image_data_url(first_path), image_data_url(last_path)],
-        "size": args.storyboard_size if args.storyboard else args.size,
-        "n": 1 if args.storyboard else RETURN_FRAME_COUNT,
-        "response_format": "url",
-        "watermark": False,
-    }
+    prompt = args.prompt or {
+        "transparent-storyboard": DEFAULT_TRANSPARENT_STORYBOARD_PROMPT,
+        "rgb-storyboard": DEFAULT_RGB_STORYBOARD_PROMPT,
+        "separate": DEFAULT_RGB_SEPARATE_PROMPT,
+    }[args.generation_mode]
+    if args.generation_mode == "transparent-storyboard":
+        boundary_rgba_path, first_rgba_path = source_rgba_endpoints(args)
+        with Image.open(boundary_rgba_path) as boundary_rgba, Image.open(
+            first_rgba_path
+        ) as first_rgba:
+            if boundary_rgba.size != first_rgba.size:
+                raise ValueError("Source RGBA endpoint dimensions must match")
+            reference = Image.new(
+                "RGBA",
+                (boundary_rgba.width * 2, boundary_rgba.height),
+                (0, 0, 0, 0),
+            )
+            reference.alpha_composite(boundary_rgba.convert("RGBA"), (0, 0))
+            reference.alpha_composite(
+                first_rgba.convert("RGBA"), (boundary_rgba.width, 0)
+            )
+        reference_path = inputs / "reference_rgba.png"
+        reference.save(reference_path, format="PNG", optimize=True)
+        body = {
+            "model": args.model,
+            "prompt": prompt,
+            "image": [image_data_url(reference_path, preserve_alpha=True)],
+            "size": args.storyboard_size,
+            "n": 1,
+            "response_format": "url",
+            "watermark": False,
+            "background": "transparent",
+            "output_format": "png",
+        }
+    elif args.generation_mode == "rgb-storyboard":
+        body = {
+            "model": args.model,
+            "prompt": prompt,
+            "image": [image_data_url(first_path), image_data_url(last_path)],
+            "size": args.storyboard_size,
+            "n": 1,
+            "response_format": "url",
+            "watermark": False,
+            "output_format": "png",
+        }
+    else:
+        body = {
+            "model": args.model,
+            "prompt": prompt,
+            "image": [image_data_url(first_path), image_data_url(last_path)],
+            "size": args.size,
+            "n": RETURN_FRAME_COUNT,
+            "response_format": "url",
+            "watermark": False,
+        }
     request_path = boundary_dir / "request.json"
     write_json(request_path, body)
+    if args.generation_mode == "transparent-storyboard":
+        fallback_body = {
+            **body,
+            "prompt": DEFAULT_RGB_STORYBOARD_PROMPT,
+            "image": [image_data_url(first_path), image_data_url(last_path)],
+        }
+        fallback_body.pop("background", None)
+        write_json(boundary_dir / "request_rgb_fallback.json", fallback_body)
     timeline_boundary = int(
         args.boundary_frame * args.target_fps / args.source_fps + 0.5
     )
@@ -245,10 +348,13 @@ def prepare(args: argparse.Namespace) -> Path:
             "returnFps": RETURN_FPS,
             "returnDurationSeconds": 1,
             "endpointPolicy": "replace generated frames 0 and 11 with exact source frames",
+            "generationMode": args.generation_mode,
             "generationLayout": (
-                f"single {STORYBOARD_COLUMNS}x{STORYBOARD_ROWS} storyboard"
-                if args.storyboard
-                else f"{RETURN_FRAME_COUNT} separate images"
+                f"single {STORYBOARD_COLUMNS}x{STORYBOARD_ROWS} transparent storyboard"
+                if args.generation_mode == "transparent-storyboard"
+                else f"single {STORYBOARD_COLUMNS}x{STORYBOARD_ROWS} RGB(235,235,235) storyboard"
+                if args.generation_mode == "rgb-storyboard"
+                else f"{RETURN_FRAME_COUNT} separate RGB(235,235,235) images"
             ),
         },
     )
@@ -270,18 +376,16 @@ def image_payload(item: object) -> bytes | None:
     return None
 
 
-def generate(args: argparse.Namespace) -> Path:
-    boundary_dir = args.boundary_dir(args)
-    request_path = boundary_dir / "request.json"
-    if not request_path.is_file():
-        raise ValueError(f"Request does not exist: {request_path}")
-    load_env(args.env_file)
-    token, secrets = credentials()
-    base = os.getenv("SEEDANCE_ARK_BASE", DEFAULT_BASE).rstrip("/")
-    body = request_path.read_bytes()
+def post_image_request(
+    request_path: Path,
+    base: str,
+    token: str,
+    secrets: tuple[str, ...],
+    timeout: float,
+) -> dict:
     request = urllib.request.Request(
         base + "/images/generations",
-        data=body,
+        data=request_path.read_bytes(),
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -290,20 +394,113 @@ def generate(args: argparse.Namespace) -> Path:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=args.timeout) as response:
-            value = json.loads(response.read().decode("utf-8", errors="replace"))
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(
             f"HTTP {error.code}: {redact(detail, secrets)}"
         ) from error
 
-    data = value.get("data", [])
-    expected_count = 1 if args.storyboard else RETURN_FRAME_COUNT
-    if len(data) != expected_count:
-        raise ValueError(
-            f"Expected {expected_count} generated images, received {len(data)}"
+
+def image_alpha_info(payload: bytes) -> dict[str, object]:
+    with Image.open(io.BytesIO(payload)) as image:
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        extrema = alpha.getextrema()
+        transparent_pixels = sum(value < 8 for value in alpha.getdata())
+        return {
+            "format": image.format,
+            "mode": image.mode,
+            "size": list(image.size),
+            "alphaExtrema": list(extrema),
+            "transparentPixelCount": transparent_pixels,
+            "hasTransparency": extrema[0] < 255 and transparent_pixels > 0,
+        }
+
+
+def file_alpha_info(path: Path) -> dict[str, object]:
+    with Image.open(path) as image:
+        rgba = image.convert("RGBA")
+        alpha = rgba.getchannel("A")
+        extrema = alpha.getextrema()
+        transparent_pixels = sum(value < 8 for value in alpha.getdata())
+        return {
+            "format": image.format,
+            "mode": image.mode,
+            "size": list(image.size),
+            "alphaExtrema": list(extrema),
+            "transparentPixelCount": transparent_pixels,
+            "hasTransparency": extrema[0] < 255 and transparent_pixels > 0,
+        }
+
+
+def generate(args: argparse.Namespace) -> Path:
+    boundary_dir = args.boundary_dir(args)
+    request_path = boundary_dir / "request.json"
+    if not request_path.is_file():
+        raise ValueError(f"Request does not exist: {request_path}")
+    load_env(args.env_file)
+    token, secrets = credentials()
+    base = os.getenv("SEEDANCE_ARK_BASE", DEFAULT_BASE).rstrip("/")
+    fallback_path = boundary_dir / "request_rgb_fallback.json"
+    request_paths = [request_path]
+    if fallback_path.is_file():
+        request_paths.append(fallback_path)
+
+    attempts = []
+    value = None
+    request_body = None
+    request_mode = None
+    provider_info = None
+    for candidate_path in request_paths:
+        candidate_body = json.loads(candidate_path.read_text(encoding="utf-8"))
+        try:
+            candidate_value = post_image_request(
+                candidate_path, base, token, secrets, args.timeout
+            )
+            candidate_data = candidate_value.get("data", [])
+            expected_count = int(candidate_body.get("n", RETURN_FRAME_COUNT))
+            if len(candidate_data) != expected_count:
+                raise ValueError(
+                    f"Expected {expected_count} generated images, received {len(candidate_data)}"
+                )
+            if expected_count == 1:
+                payload = image_payload(candidate_data[0])
+                if payload is None:
+                    raise ValueError("Unrecognized storyboard image payload")
+                info = image_alpha_info(payload)
+                if candidate_body.get("background") == "transparent" and not info["hasTransparency"]:
+                    raise ValueError("Transparent request returned no alpha transparency")
+            else:
+                payload = None
+                info = None
+            value = candidate_value
+            request_body = candidate_body
+            request_mode = (
+                "transparent-storyboard"
+                if candidate_body.get("background") == "transparent"
+                else "rgb-storyboard"
+                if int(candidate_body.get("n", RETURN_FRAME_COUNT)) == 1
+                else "separate"
+            )
+            provider_info = info
+            break
+        except (RuntimeError, ValueError) as error:
+            attempts.append(
+                {
+                    "request": candidate_path.name,
+                    "error": str(error),
+                }
+            )
+    if value is None or request_body is None:
+        raise RuntimeError(
+            "All Seedream generation attempts failed: "
+            + json.dumps(attempts, ensure_ascii=False)
         )
+
+    data = value.get("data", [])
+    expected_count = int(request_body.get("n", RETURN_FRAME_COUNT))
 
     generated = boundary_dir / "generated"
     if generated.exists():
@@ -311,14 +508,15 @@ def generate(args: argparse.Namespace) -> Path:
             raise FileExistsError(f"Output already exists: {generated}")
         shutil.rmtree(generated)
     generated.mkdir(parents=True)
-    if args.storyboard:
+    if expected_count == 1:
         payload = image_payload(data[0])
         if payload is None:
             raise ValueError("Unrecognized storyboard image payload")
         storyboard_path = generated / "storyboard.png"
         storyboard_path.write_bytes(payload)
         with Image.open(storyboard_path) as storyboard:
-            image = storyboard.convert("RGB")
+            has_alpha = provider_info is not None and provider_info["hasTransparency"]
+            image = storyboard.convert("RGBA" if has_alpha else "RGB")
             if image.width % STORYBOARD_COLUMNS or image.height % STORYBOARD_ROWS:
                 raise ValueError(
                     "Storyboard dimensions must divide evenly into "
@@ -326,6 +524,10 @@ def generate(args: argparse.Namespace) -> Path:
                 )
             cell_width = image.width // STORYBOARD_COLUMNS
             cell_height = image.height // STORYBOARD_ROWS
+            if abs(cell_width * 3 - cell_height * 2) > 2:
+                raise ValueError(
+                    f"Storyboard cells must be 2:3, got {cell_width}x{cell_height}"
+                )
             for index in range(RETURN_FRAME_COUNT):
                 row, column = divmod(index, STORYBOARD_COLUMNS)
                 cell = image.crop(
@@ -355,11 +557,14 @@ def generate(args: argparse.Namespace) -> Path:
     }
     safe_response["data_count"] = len(data)
     safe_response["image_payloads"] = "downloaded locally; remote URLs redacted"
+    safe_response["generationMode"] = request_mode
+    safe_response["providerImage"] = provider_info
     safe_response["generationLayout"] = (
         f"single {STORYBOARD_COLUMNS}x{STORYBOARD_ROWS} storyboard sliced row-major"
-        if args.storyboard
+        if expected_count == 1
         else f"{RETURN_FRAME_COUNT} separate images"
     )
+    safe_response["attempts"] = attempts
     (boundary_dir / "response.json").write_text(
         redact(safe_response, secrets) + "\n", encoding="utf-8"
     )
@@ -391,36 +596,59 @@ def process(args: argparse.Namespace) -> Path:
     last = read_rgb(boundary_dir / "inputs/last_frame.png")
     if first.size != last.size:
         raise ValueError("Endpoint frames must have identical dimensions")
-    frames = []
-    matte_reports = []
-    for path in generated_paths:
+    provider_reports = []
+    source_rgb_frames = []
+    source_rgba_frames = []
+    for index, path in enumerate(generated_paths):
         with Image.open(path) as image:
-            frames.append(
-                image.convert("RGB").resize(first.size, Image.Resampling.LANCZOS)
-            )
-    frames[0] = first.copy()
-    frames[-1] = last.copy()
+            rgba = image.convert("RGBA").resize(first.size, Image.Resampling.LANCZOS)
+            info = file_alpha_info(path)
+        rgb_frame = rgba.convert("RGB")
+        if index == 0:
+            rgb_frame = first.copy()
+        elif index == len(generated_paths) - 1:
+            rgb_frame = last.copy()
+        source_rgb_frames.append(rgb_frame)
+        source_rgba_frames.append(rgba)
+        provider_reports.append({"frame": index, **info})
 
-    for index, frame in enumerate(frames):
+    # Keep every complete RGB PNG on disk before any RGB fallback matting.
+    for index, frame in enumerate(source_rgb_frames):
         frame.save(rgb_dir / f"frame_{index:04d}.png", format="PNG", optimize=True)
 
-    session = new_session(args.matting_model, providers=[args.provider])
-    for index, frame in enumerate(frames):
-        rgb = np.asarray(frame)
-        rembg_rgba = np.asarray(
-            remove(rgb, session=session, alpha_matting=False)
-        )
-        cutout, matte_report = matte_rgb_frame(
-            rgb,
-            rembg_rgba,
-            background_min=args.background_min,
-            background_max=args.background_max,
-            edge_pixels=args.edge_pixels,
-        )
-        Image.fromarray(cutout).save(
+    matte_reports = []
+    provider_alpha_frames = []
+    session = None
+    for index, rgba in enumerate(source_rgba_frames):
+        provider_info = provider_reports[index]
+        if provider_info["hasTransparency"]:
+            provider_alpha_frames.append(index)
+        if args.source_rgba_dir and index in {0, len(source_rgba_frames) - 1}:
+            continue
+        if provider_info["hasTransparency"]:
+            repaired = np.asarray(rgba).copy()
+            repaired[:, :, 3] = fill_enclosed_transparent(repaired[:, :, 3])
+            cutout = repaired
+        else:
+            if session is None:
+                session = new_session(args.matting_model, providers=[args.provider])
+            rgb_path = rgb_dir / f"frame_{index:04d}.png"
+            with Image.open(rgb_path) as saved_rgb:
+                rgb = np.asarray(saved_rgb.convert("RGB"))
+            rembg_rgba = np.asarray(
+                remove(rgb, session=session, alpha_matting=False)
+            )
+            cutout, matte_report = matte_rgb_frame(
+                rgb,
+                rembg_rgba,
+                background_min=args.background_min,
+                background_max=args.background_max,
+                edge_pixels=args.edge_pixels,
+            )
+            matte_reports.append({"frame": index, **matte_report})
+        Image.fromarray(np.asarray(cutout, dtype=np.uint8)).save(
             rgba_dir / f"frame_{index:04d}.png", format="PNG", optimize=True
         )
-        matte_reports.append({"frame": index, **matte_report})
 
     endpoint_policy = "frames 0 and 11 are exact source RGB endpoints and independently matted"
     if args.source_rgba_dir:
@@ -468,17 +696,45 @@ def process(args: argparse.Namespace) -> Path:
         {
             "generationModel": "source_reverse_sampling" if fallback else args.model,
             "generatedFrameCount": len(generated_paths),
-            "frameCount": len(frames),
+            "frameCount": len(source_rgb_frames),
             "sourceSize": list(first.size),
             "optimizedSize": list(size),
             "returnFps": RETURN_FPS,
             "returnDurationFrames": RETURN_FRAME_COUNT,
             "returnDurationSeconds": 1,
             "endpointPolicy": endpoint_policy,
-            "mattingPolicy": (
-                "complete RGB PNG first; border-connected rembg background and RGB range; "
-                "rembg edge feather"
+            "generationMode": (
+                "source-reverse-sampling"
+                if fallback
+                else "transparent-provider-alpha"
+                if all(
+                    provider_reports[index]["hasTransparency"]
+                    for index in range(1, RETURN_FRAME_COUNT - 1)
+                )
+                else "rgb-storyboard"
             ),
+            "providerAlpha": {
+                "frameIndices": provider_alpha_frames,
+                "frameCount": len(provider_alpha_frames),
+                "frames": provider_reports,
+            },
+            "mattingPolicy": {
+                "transparent": (
+                    "preserve provider alpha; fill enclosed transparent components; no rembg"
+                ),
+                "rgbFallback": (
+                    "save complete RGB PNG first; border-connected rembg background and "
+                    "RGB(235,235,235) range 230..241; rembg edge feather"
+                ),
+                "rgbMattedFrameIndices": [
+                    item["frame"] for item in matte_reports
+                ],
+            },
+            "fallbackBackgroundColor": [
+                RGB_FALLBACK_COLOR,
+                RGB_FALLBACK_COLOR,
+                RGB_FALLBACK_COLOR,
+            ],
             "backgroundRange": [args.background_min, args.background_max],
             "edgePixels": args.edge_pixels,
             "holePolicy": "fill enclosed transparent components",

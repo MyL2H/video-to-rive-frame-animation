@@ -21,14 +21,16 @@ Do not ask for dimensions, quality, FPS, frame count, return duration, cut point
 
 - Play every source and return timeline at exactly `12 FPS`.
 - For a 24 FPS source, retain every second decoded frame so the original motion speed is preserved. Always retain decoded source frame `N-1`, even when it is not on the regular sample grid.
-- Save every retained frame as a complete RGB PNG before matting, then write full-resolution transparent PNG frames. Never derive the matte directly from an in-memory video frame when the source background is a measurable uniform color range.
+- Save every retained source frame as a complete RGB PNG before matting, then write full-resolution transparent PNG frames. For generated return frames, preserve verified provider alpha directly; only save and matte an RGB fallback. Never derive an RGB matte directly from an in-memory image when a complete PNG can be audited first.
 - For a uniform source background, use the inclusive per-channel RGB range `230..241` (`230 <= R/G/B <= 241`) as `--background-min 230 --background-max 241`. Save every decoded or generated RGB PNG before matting. Remove the union of border-connected `rembg` background and border-connected pixels in this RGB range. Keep complete subject components, use `rembg` only for a small edge feather, close tiny mask gaps, and fill enclosed transparent holes. Do not delete every pixel in the RGB range globally; matching colors can occur inside the subject.
 - Resize proportionally to `50%`, using Lanczos and nearest integer pixel dimensions.
 - Write optimized transparent PNG and RGBA WebP frames with quality `82` and compression method `6`.
 - Define cut points at every whole second before the end, plus the decoded end frame. Map each source cut to its corresponding 12 FPS timeline frame.
-- For every action and cut point, use `doubao-seedream-5-0-pro-260628` to generate exactly 12 ordered return images from the exact boundary pose to source frame `0`.
-- Seedream requires a generation canvas of at least `921600` pixels. For a `2:3` source, generate at `1024x1536`, resize generated interiors to the source frame dimensions, then replace frames `0` and `11` with the exact source endpoints.
-- Prefer one request that returns 12 separate images. Do not generate 12 unrelated images independently. If the API cannot return 12 images in one request, generate one ordered 4x3 storyboard with 12 equal cells and slice it into 12 images; for `2:3` cells use `1024x1152` (`256x384` cells), read row-major, and report that fallback.
+- For every action and cut point, use `doubao-seedream-5-0-pro-260628` to generate exactly 12 ordered return poses from the exact boundary pose to source frame `0`.
+- Seedream supports transparent output only when the request has exactly one input image, that input is a PNG with real Alpha, and the requested output is PNG. Build one transparent RGBA reference containing the boundary and first-frame poses side by side. Use `background: "transparent"`, `output_format: "png"`, and `n: 1`.
+- Generate one high-resolution `2016x2268` transparent 4x3 storyboard, read it row-major, and slice 12 equal `504x756` 2:3 panels. Seedream rejects generation areas above `4624220` pixels. Resize only the generated interiors to source dimensions, then replace frames `0` and `11` with the exact source endpoints.
+- When transparent generation fails or its output has no real Alpha, automatically retry with two RGB endpoint inputs and require the entire background to be exactly flat `RGB(235,235,235)` with no gradient, texture, shadow, floor, text, or watermark. Save the complete RGB PNG frames first, then matte saved files with border-connected `rembg` evidence and the inclusive `230..241` background range.
+- Both prompt paths must request crisp high-resolution 2D art with sharp edges and fine facial, hair, and clothing detail, explicitly excluding blur and compression artifacts. Do not generate 12 unrelated images independently; use the single 4x3 storyboard as the default coherent layout.
 - Require natural, evenly spaced motion and consistent identity, face, clothing, body proportions, subject size, feet anchor, screen position, style, lighting, camera, framing, and background. Reject zoom, shrink, enlarge, crop, reframe, drift, morphing, object changes, text, watermark, or cuts.
 - If Seedream's output safety rejects a child-safe animated subject, retry with explicit non-sensitive constraints such as fully clothed, child-friendly, and no violence or adult themes. Do not loosen the identity, timing, endpoint, scale, or framing constraints.
 - If output safety still rejects a storyboard after safe-prompt retries, build the return with `scripts/build_local_return_frames.py`, sampling source motion in reverse at 12 evenly spaced poses including both exact endpoints. Mark `source_reverse_sampling` as a generation exception; never present it as Seedream output.
@@ -100,10 +102,11 @@ Read credentials from a local environment file or process environment. Accept `A
    ```bash
    python scripts/build_seedream_return_frames.py \
      --video input.mp4 --output-root <stem>_seedream_returns \
-    --boundary-frame <source-frame> --target-fps 12 --size 1024x1536 run
+     --boundary-frame <source-frame> --target-fps 12 \
+     --source-rgba-dir <stem>_frames_12fps run
    ```
 
-   Require exactly 12 generated images. Replace the endpoints with exact source frames, write the complete `frames_rgb` PNGs first, then matte all 12 saved PNGs using border-connected `rembg` background, the measured RGB range, and hole repair. Write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same strict prompt. If drift remains, run:
+   The default `auto` mode first requests a single high-resolution transparent storyboard. Preserve verified provider Alpha without running `rembg`. If the request fails or the returned PNG has no real Alpha, the same run retries with the exact `RGB(235,235,235)` fallback prompt. For that fallback only, write complete `frames_rgb` PNGs first and matte the saved RGB files using border-connected `rembg` background, the `230..241` range, and hole repair. Replace endpoints with exact source RGBA frames and write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same strict prompt. If drift remains, run:
 
    ```bash
    python scripts/stabilize_return_scale.py \
@@ -171,10 +174,10 @@ For each input stem:
     inputs/                              exact source endpoint frames
     request.json                         sanitized generation request
     response.json                        sanitized provider response
-    generated/                           12 provider images before endpoint replacement
+    generated/                           one provider storyboard and 12 sliced frames
     processed/
-      frames_rgb/                        exact endpoints plus 10 generated interior frames
-      frames_rgba/                       transparent full-resolution return frames
+      frames_rgb/                        complete RGB audit PNGs, including RGB fallbacks
+      frames_rgba/                       provider Alpha or matted full-resolution frames
       frames_50_png/                     optimized return PNG frames
       frames_50_webp/                    Rive return WebP frames
       manifest.json                      counts, size, timing, and endpoint policy
