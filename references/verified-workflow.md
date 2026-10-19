@@ -79,11 +79,13 @@ Validate dimensions, frame counts, numeric ordering, and alpha channels before p
 
 ### 4. Generate twelve-frame returns
 
+Read [storyboard-geometry.md](storyboard-geometry.md) for the source-ratio equations, exact pixel prompt contract, raw-board overlay review and rejection rules. Canvas divisibility alone does not establish equal semantic panels; never conceal an invalid board with per-panel resizing.
+
 Run `scripts/build_seedream_return_frames.py` once for every cut point. The helper:
 
 - saves exact source endpoints;
 - creates one transparent RGBA reference containing the boundary pose and source first pose side by side;
-- requests one `2016x2268` transparent PNG storyboard, producing twelve `504x756` 2:3 cells with no gutters or labels;
+- requests one source-ratio-derived transparent PNG storyboard, producing twelve equal cells with no gutters or labels (`2016x2268` canvas and `504x756` cells for `512x768` sources);
 - resizes generated interior images to the source dimensions before endpoint replacement;
 - slices the 4x3 storyboard row-major and requires exactly 12 frames;
 - stores remote URL-free sanitized response metadata;
@@ -93,7 +95,7 @@ Run `scripts/build_seedream_return_frames.py` once for every cut point. The help
 
 Seedream transparent output has a strict input contract: exactly one input image, the input must be a PNG containing real Alpha, and the output must be PNG. `background: transparent` is rejected for RGB input, multiple input images, or non-PNG output. Use `n: 1` and request one transparent 4x3 storyboard. Seedream rejects generation areas above `4624220` pixels; `2016x2268` is below this limit and provides much more detail than the earlier `1024x1152` storyboard.
 
-Both the transparent and RGB prompts must request crisp high-resolution 2D art, sharp edges, fine facial, hair, and clothing detail, and no blur or compression artifacts. Validate four columns, three rows, equal `504x756` cells, 2:3 proportions, row-major reading order, and panel continuity before slicing. Do not use 12 unrelated independent requests.
+Both the transparent and RGB prompts must request crisp high-resolution 2D art, sharp edges, fine facial, hair, and clothing detail, and no blur or compression artifacts. Validate four columns, three rows, equal cells with exactly the original single-frame proportions (`504x756`, 2:3 for the current sources), row-major reading order, and panel continuity before slicing. Do not use 12 unrelated independent requests.
 
 If transparent generation fails or the returned PNG lacks real Alpha, automatically use the generated `request_rgb_fallback.json`. That request uses two RGB endpoint inputs and requires a flat `RGB(235,235,235)` background with no gradient, texture, noise, vignette, floor, shadow, backdrop object, text, or watermark. Save every fallback frame as a complete RGB PNG in `processed/frames_rgb` before matting. Run `rembg` and the inclusive `230..241` border-connected background rule only on those saved RGB fallback files. When provider Alpha is present, preserve it and do not run `rembg`; only fill enclosed transparent holes and keep the RGB files as an audit view.
 
@@ -103,7 +105,7 @@ If the safe wording is still rejected, use `scripts/build_local_return_frames.py
 
 ### 5. Validate return scale and framing
 
-Measure each interior frame against both endpoints. Reject large or small subjects, feet movement, camera drift, or changed framing. Retry at most twice. If drift remains, run `scripts/stabilize_return_scale.py` and use only its interior frames. Preserve exact endpoints and report the fallback.
+Measure each interior frame against both endpoints. Reject large or small subjects, feet movement, camera drift, or changed framing. Retry at most twice. If the grid, subjects and proportions are valid, small residual uniform drift may use `scripts/stabilize_return_scale.py` on interior frames. Reject unequal grids or clipped/distorted subjects; stabilization cannot rescue them. Preserve exact endpoints and report the fallback.
 
 ### 6. Generate the combined Rive project
 
@@ -173,14 +175,14 @@ Assets are root elements before the `Artboard`. External frame changes are not w
 ## Common failure modes
 
 - `ModelNotOpen`: the model is not activated for the API account or activation has not propagated.
-- Invalid storyboard grid or missing panel: reject the output; the default is exactly four columns, three rows, and 12 equal 2:3 panels.
+- Invalid storyboard grid or missing panel: reject the output; the default is exactly four columns, three rows, and 12 equal panels at the original single-frame aspect ratio.
 - Transparent request returns opaque RGB: reject it and use the exact `RGB(235,235,235)` fallback request before matting saved RGB PNGs.
 - Blank first frame: inspect `Solo.activeComponentId` and target child `Image` IDs.
 - Frozen animation: verify `propertyKey="296"` and `KeyFrameId` keys.
 - Slow or fast playback: verify source and return FPS are both 12 and return duration is 12 frames.
 - Missing final return frame visibility: verify the repeated final held key at frame `12`.
 - Missing source frames: inspect `extraction_manifest.json` and ensure decoded frame `N-1` was retained.
-- Enlarged or shrunken return subject: reject, retry twice, then stabilize only interior frames.
+- Enlarged or shrunken return subject: reject and retry at most twice; stabilize only residual uniform drift on a valid grid, never invalid layout or body proportions.
 - Interrupt request lost before the boundary: use a Boolean latch and conditioned `100%` exit.
 - Return freezes or switching fails: verify unconditional return-to-Router transition and Router routes.
 - A second click leaks: clear `interruptRequested` on return and Router exits.

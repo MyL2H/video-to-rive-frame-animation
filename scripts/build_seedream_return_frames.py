@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from rembg import new_session, remove
+from storyboard_geometry import layout, prompt_contract, validate_image, grid_overlay
 
 from rgb_matte import (
     DEFAULT_BACKGROUND_MAX,
@@ -34,36 +35,45 @@ RETURN_FPS = 12
 RETURN_FRAME_COUNT = 12
 STORYBOARD_COLUMNS = 4
 STORYBOARD_ROWS = 3
-STORYBOARD_SIZE = "2016x2268"
 RGB_FALLBACK_COLOR = 235
 DEFAULT_TRANSPARENT_STORYBOARD_PROMPT = (
     "The input is one transparent PNG containing exactly two side-by-side endpoint "
     "references: the left panel is the first pose and the right panel is the final pose. "
     "Return exactly one high-resolution transparent PNG animation storyboard with exactly "
-    "4 columns and 3 rows, for 12 equal 2:3 rectangular panels and no gutters, borders, "
+    "4 columns and 3 rows, for 12 equal source-aspect-ratio panels and no gutters, borders, "
     "captions, labels, or watermark. Read panels left to right and top to bottom. Panel 1 "
-    "must match the left input pose and panel 12 must match the right input pose. Build one "
-    "smooth, natural return motion with evenly spaced poses. Preserve the same fully clothed, "
-    "child-friendly cartoon character identity, face, clothing, body proportions, subject "
-    "height, torso width, feet anchor, screen position, art style, lighting, camera, framing, "
-    "and transparent alpha background in every panel. Use crisp high-resolution 2D animation "
-    "art, clean detailed line work, sharp edges, fine facial and clothing detail, and no blur "
-    "or compression artifacts. Do not zoom, crop, reframe, drift, morph, add objects, remove "
-    "objects, or change the background."
+    "must match the left input pose and panel 12 must match the right input pose. Each panel "
+    "is the complete source-frame canvas at the same normalized coordinates: keep the subject "
+    "bounding box, head and feet anchors, horizontal position, vertical position, scale, and "
+    "the same amount of top and bottom space as the input reference. Do not add padding, "
+    "recenter, shrink, enlarge, or lay out the panels as thumbnails. Build one smooth, natural "
+    "return motion with evenly spaced poses while preserving the same fully clothed, "
+    "child-friendly cartoon character identity, face, clothing, body proportions, art style, "
+    "lighting, camera, framing, and scale. The alpha matte must be clean: outside pixels are "
+    "fully alpha 0, with no gray or white halo, fringe, spill, grid line, or semi-transparent "
+    "background edge; keep only antialiased pixels that belong to the character. Use crisp "
+    "high-resolution 2D animation art, clean detailed line work, sharp edges, fine facial and "
+    "clothing detail, and no blur or compression artifacts. Do not zoom, crop, reframe, drift, "
+    "morph, add objects, remove objects, or change the background."
 )
 DEFAULT_RGB_STORYBOARD_PROMPT = (
     "Return exactly one high-resolution animation storyboard containing 4 columns and 3 "
-    "rows, for 12 equal 2:3 rectangular panels. Read panels left to right and top to bottom. "
+    "rows, for 12 equal source-aspect-ratio panels. Read panels left to right and top to bottom. "
     "Panel 1 must match the first input pose and panel 12 must match the second input pose. "
     "Build one smooth, natural return motion with evenly spaced poses. Preserve the same "
     "fully clothed, child-friendly cartoon character identity, face, clothing, body "
     "proportions, subject height, torso width, feet anchor, screen position, art style, "
-    "lighting, camera, framing, and scale. The entire background of every panel must be one "
+    "lighting, camera, framing, and scale. Every panel is the complete source-frame canvas at "
+    "the same normalized coordinates; keep the subject bounding box, head and feet anchors, "
+    "horizontal and vertical position, scale, and top and bottom space exactly like the input "
+    "references. Do not add padding, recenter, shrink, enlarge, or lay out the panels as "
+    "thumbnails. The entire background of every panel must be one "
     "exact flat RGB(235,235,235) color with no gradient, texture, noise, vignette, floor, "
-    "shadow, backdrop object, text, or watermark. Use crisp high-resolution 2D animation art, "
-    "clean detailed line work, sharp edges, fine facial and clothing detail, and no blur or "
-    "compression artifacts. Do not zoom, crop, reframe, drift, morph, add objects, or remove "
-    "objects."
+    "shadow, backdrop object, grid line, text, or watermark. Keep the character edge matte "
+    "clean, with no gray or white halo, fringe, spill, or residual background pixels. Use "
+    "crisp high-resolution 2D animation art, clean detailed line work, sharp edges, fine facial "
+    "and clothing detail, and no blur or compression artifacts. Do not zoom, crop, reframe, "
+    "drift, morph, add objects, or remove objects."
 )
 DEFAULT_RGB_SEPARATE_PROMPT = (
     "Return exactly 12 separate high-resolution images in chronological order. Build one "
@@ -96,7 +106,7 @@ def parse_args() -> argparse.Namespace:
         default="auto",
     )
     parser.add_argument("--storyboard", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--storyboard-size", default=STORYBOARD_SIZE)
+    parser.add_argument("--storyboard-size", help="Exact canvas size; default derives equal cells from the source aspect ratio")
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--scale", type=float, default=0.5)
     parser.add_argument("--webp-quality", type=int, default=82)
@@ -132,6 +142,7 @@ def parse_args() -> argparse.Namespace:
         raise ValueError(f"OpenCV could not open video: {args.video}")
     fps = float(capture.get(cv2.CAP_PROP_FPS))
     frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    source_size = (int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
     capture.release()
     if fps <= 0 or frame_count <= 0:
         raise ValueError(f"Invalid video metadata: fps={fps}, frames={frame_count}")
@@ -146,6 +157,8 @@ def parse_args() -> argparse.Namespace:
     args.boundary_dir = boundary_dir
     args.source_fps = fps
     args.source_frame_count = frame_count
+    args.storyboard_geometry = layout(source_size, args.storyboard_size)
+    args.storyboard_size = '{}x{}'.format(*args.storyboard_geometry['storyboardSize'])
     return args
 
 
@@ -269,6 +282,9 @@ def prepare(args: argparse.Namespace) -> Path:
         "rgb-storyboard": DEFAULT_RGB_STORYBOARD_PROMPT,
         "separate": DEFAULT_RGB_SEPARATE_PROMPT,
     }[args.generation_mode]
+    if args.generation_mode != "separate":
+        # Custom prompts cannot accidentally drop the source-ratio/grid contract.
+        prompt += prompt_contract(args.storyboard_geometry)
     if args.generation_mode == "transparent-storyboard":
         boundary_rgba_path, first_rgba_path = source_rgba_endpoints(args)
         with Image.open(boundary_rgba_path) as boundary_rgba, Image.open(
@@ -324,7 +340,9 @@ def prepare(args: argparse.Namespace) -> Path:
     if args.generation_mode == "transparent-storyboard":
         fallback_body = {
             **body,
-            "prompt": DEFAULT_RGB_STORYBOARD_PROMPT,
+            "prompt": DEFAULT_RGB_STORYBOARD_PROMPT
+            + (" Additional motion constraints: " + args.prompt if args.prompt else "")
+            + prompt_contract(args.storyboard_geometry),
             "image": [image_data_url(first_path), image_data_url(last_path)],
         }
         fallback_body.pop("background", None)
@@ -349,6 +367,7 @@ def prepare(args: argparse.Namespace) -> Path:
             "returnDurationSeconds": 1,
             "endpointPolicy": "replace generated frames 0 and 11 with exact source frames",
             "generationMode": args.generation_mode,
+            "storyboardGeometry": args.storyboard_geometry,
             "generationLayout": (
                 f"single {STORYBOARD_COLUMNS}x{STORYBOARD_ROWS} transparent storyboard"
                 if args.generation_mode == "transparent-storyboard"
@@ -435,6 +454,19 @@ def file_alpha_info(path: Path) -> dict[str, object]:
         }
 
 
+def validate_saved_storyboard(args: argparse.Namespace, path: Path, spec: dict) -> None:
+    endpoints = None
+    if args.source_rgba_dir:
+        endpoints = [Image.open(p).convert('RGBA') for p in source_rgba_endpoints(args)]
+    with Image.open(path) as image:
+        report = validate_image(image, spec, endpoints)
+        grid_overlay(image, spec).save(path.with_name('storyboard_grid_overlay.png'))
+    write_json(path.with_name('layout_validation.json'), {'geometry': spec, **report})
+    if not report['automaticPassed']:
+        raise ValueError('Storyboard geometry rejected; do not slice, stretch or stabilize it: '
+                         + '; '.join(report['errors']))
+
+
 def generate(args: argparse.Namespace) -> Path:
     boundary_dir = args.boundary_dir(args)
     request_path = boundary_dir / "request.json"
@@ -514,20 +546,12 @@ def generate(args: argparse.Namespace) -> Path:
             raise ValueError("Unrecognized storyboard image payload")
         storyboard_path = generated / "storyboard.png"
         storyboard_path.write_bytes(payload)
+        spec = layout(tuple(args.storyboard_geometry['sourceSize']), request_body['size'])
+        validate_saved_storyboard(args, storyboard_path, spec)
         with Image.open(storyboard_path) as storyboard:
             has_alpha = provider_info is not None and provider_info["hasTransparency"]
             image = storyboard.convert("RGBA" if has_alpha else "RGB")
-            if image.width % STORYBOARD_COLUMNS or image.height % STORYBOARD_ROWS:
-                raise ValueError(
-                    "Storyboard dimensions must divide evenly into "
-                    f"{STORYBOARD_COLUMNS}x{STORYBOARD_ROWS} cells"
-                )
-            cell_width = image.width // STORYBOARD_COLUMNS
-            cell_height = image.height // STORYBOARD_ROWS
-            if abs(cell_width * 3 - cell_height * 2) > 2:
-                raise ValueError(
-                    f"Storyboard cells must be 2:3, got {cell_width}x{cell_height}"
-                )
+            cell_width, cell_height = spec['cellSize']
             for index in range(RETURN_FRAME_COUNT):
                 row, column = divmod(index, STORYBOARD_COLUMNS)
                 cell = image.crop(
@@ -574,6 +598,10 @@ def generate(args: argparse.Namespace) -> Path:
 def process(args: argparse.Namespace) -> Path:
     boundary_dir = args.boundary_dir(args)
     generated = boundary_dir / "generated"
+    if (generated / 'storyboard.png').is_file():
+        request_body = json.loads((boundary_dir / 'request.json').read_text())
+        spec = layout(tuple(args.storyboard_geometry['sourceSize']), request_body['size'])
+        validate_saved_storyboard(args, generated / 'storyboard.png', spec)
     generated_paths = sorted(generated.glob("frame_*.png"))
     if len(generated_paths) != RETURN_FRAME_COUNT:
         raise ValueError(
@@ -601,6 +629,8 @@ def process(args: argparse.Namespace) -> Path:
     source_rgba_frames = []
     for index, path in enumerate(generated_paths):
         with Image.open(path) as image:
+            if image.width * first.height != image.height * first.width:
+                raise ValueError(f'Panel {index} does not match source aspect ratio; refusing anisotropic resize')
             rgba = image.convert("RGBA").resize(first.size, Image.Resampling.LANCZOS)
             info = file_alpha_info(path)
         rgb_frame = rgba.convert("RGB")

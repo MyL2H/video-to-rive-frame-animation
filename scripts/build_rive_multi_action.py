@@ -112,7 +112,8 @@ def load_actions(manifest_path: Path) -> tuple[list[Action], dict, tuple[int, in
         previous_boundary = -1
         for return_data in action_data.get("returns", []):
             boundary = int(return_data["boundaryFrame"])
-            if not previous_boundary < boundary < len(source_paths):
+            # The decoded end frame is a valid final interruption boundary.
+            if not previous_boundary < boundary <= len(source_paths) - 1:
                 raise ValueError(
                     f"Return boundaries must increase and stay inside the action: {return_data}"
                 )

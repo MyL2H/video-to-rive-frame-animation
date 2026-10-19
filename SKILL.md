@@ -28,7 +28,7 @@ Do not ask for dimensions, quality, FPS, frame count, return duration, cut point
 - Define cut points at every whole second before the end, plus the decoded end frame. Map each source cut to its corresponding 12 FPS timeline frame.
 - For every action and cut point, use `doubao-seedream-5-0-pro-260628` to generate exactly 12 ordered return poses from the exact boundary pose to source frame `0`.
 - Seedream supports transparent output only when the request has exactly one input image, that input is a PNG with real Alpha, and the requested output is PNG. Build one transparent RGBA reference containing the boundary and first-frame poses side by side. Use `background: "transparent"`, `output_format: "png"`, and `n: 1`.
-- Generate one high-resolution `2016x2268` transparent 4x3 storyboard, read it row-major, and slice 12 equal `504x756` 2:3 panels. Seedream rejects generation areas above `4624220` pixels. Resize only the generated interiors to source dimensions, then replace frames `0` and `11` with the exact source endpoints.
+- Derive a strict equal 4x3 storyboard from the **single source frame aspect ratio**. For 512x768 sources, use a 2016x2268 canvas with twelve exactly 504x756 cells (2:3 each), with boundaries x=[0,504,1008,1512,2016], y=[0,756,1512,2268]. Other source ratios require different dimensions; never hardcode 2:3 or stretch to fit. Keep the total area at or below 4624220 pixels. Both prompt paths must include exact canvas, cell, coordinate and uniform-scale constraints. Read [references/storyboard-geometry.md](references/storyboard-geometry.md) before generation.
 - When transparent generation fails or its output has no real Alpha, automatically retry with two RGB endpoint inputs and require the entire background to be exactly flat `RGB(235,235,235)` with no gradient, texture, shadow, floor, text, or watermark. Save the complete RGB PNG frames first, then matte saved files with border-connected `rembg` evidence and the inclusive `230..241` background range.
 - Both prompt paths must request crisp high-resolution 2D art with sharp edges and fine facial, hair, and clothing detail, explicitly excluding blur and compression artifacts. Do not generate 12 unrelated images independently; use the single 4x3 storyboard as the default coherent layout.
 - Require natural, evenly spaced motion and consistent identity, face, clothing, body proportions, subject size, feet anchor, screen position, style, lighting, camera, framing, and background. Reject zoom, shrink, enlarge, crop, reframe, drift, morphing, object changes, text, watermark, or cuts.
@@ -36,7 +36,7 @@ Do not ask for dimensions, quality, FPS, frame count, return duration, cut point
 - If output safety still rejects a storyboard after safe-prompt retries, build the return with `scripts/build_local_return_frames.py`, sampling source motion in reverse at 12 evenly spaced poses including both exact endpoints. Mark `source_reverse_sampling` as a generation exception; never present it as Seedream output.
 - Replace generated frames `0` and `11` with the exact source endpoints. Do not cross-fade the endpoints.
 - Play the 12 unique return images at `12 FPS`. Hold the final image through the end of the one-second timeline by repeating its held key at Rive frame `12`.
-- Measure scale and framing drift in every return. Retry rejected results at most twice. If drift remains, normalize only interior frames with `scripts/stabilize_return_scale.py`; keep both endpoints exact and report the fallback.
+- Inspect the raw storyboard and its exact-grid overlay before processing or replacing endpoints. Reject unequal cells, wrong source proportions, cross-cell fragments, clipping, or changed objects; retry at most twice, then report generation failure. Do not repair rejected layouts by cropping, stretching, deleting fragments, or stabilizing. Only small residual uniform scale/anchor drift on a valid equal grid may use `scripts/stabilize_return_scale.py`; keep endpoints exact and report that fallback.
 - Build one Rive CLI project containing all logical actions, their forward segments, all return timelines, and the routing state machine.
 - Run structural checks, a local build, and sampled pointer-driven renders before reporting completion.
 - Preserve source files and put derived files in new directories.
@@ -103,10 +103,12 @@ Read credentials from a local environment file or process environment. Accept `A
    python scripts/build_seedream_return_frames.py \
      --video input.mp4 --output-root <stem>_seedream_returns \
      --boundary-frame <source-frame> --target-fps 12 \
-     --source-rgba-dir <stem>_frames_12fps run
+     --source-rgba-dir <stem>_frames_12fps prepare
+   # Repeat the same arguments with generate. Inspect storyboard.png and
+   # storyboard_grid_overlay.png before repeating them with process.
    ```
 
-   The default `auto` mode first requests a single high-resolution transparent storyboard. Preserve verified provider Alpha without running `rembg`. If the request fails or the returned PNG has no real Alpha, the same run retries with the exact `RGB(235,235,235)` fallback prompt. For that fallback only, write complete `frames_rgb` PNGs first and matte the saved RGB files using border-connected `rembg` background, the `230..241` range, and hole repair. Replace endpoints with exact source RGBA frames and write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same strict prompt. If drift remains, run:
+   The default `auto` mode first requests a single high-resolution transparent storyboard with dimensions derived from the source ratio. Follow the strict acceptance gate in [references/storyboard-geometry.md](references/storyboard-geometry.md): exact dimensions and source-clear-margin checks run automatically; all twelve cells still require visual review before processing. The `run` shortcut cannot perform that visual review and must not be treated as acceptance. Preserve verified provider Alpha without running `rembg`. If the request fails or the returned PNG has no real Alpha, the same run retries with the exact `RGB(235,235,235)` fallback prompt. For that fallback only, write complete `frames_rgb` PNGs first and matte the saved RGB files using border-connected `rembg` background, the `230..241` range, and hole repair. Replace endpoints with exact source RGBA frames and write 50% PNG/WebP derivatives. Measure interior scale and framing against both endpoints. Retry at most twice with the same numerical geometry contract. Invalid grids or distorted proportions remain rejected. Only for residual uniform drift on an otherwise accepted grid, run:
 
    ```bash
    python scripts/stabilize_return_scale.py \
@@ -174,7 +176,9 @@ For each input stem:
     inputs/                              exact source endpoint frames
     request.json                         sanitized generation request
     response.json                        sanitized provider response
-    generated/                           one provider storyboard and 12 sliced frames
+    generated/                           raw storyboard and 12 fixed-grid slices
+      storyboard_grid_overlay.png        local-only exact-grid review overlay
+      layout_validation.json             automated geometry checks; visual review still required
     processed/
       frames_rgb/                        complete RGB audit PNGs, including RGB fallbacks
       frames_rgba/                       provider Alpha or matted full-resolution frames
