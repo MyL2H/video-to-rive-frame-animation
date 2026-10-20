@@ -1,6 +1,6 @@
 # Verified 12 FPS Workflow and Constraints
 
-This document records frame-processing and Rive invariants for the 12 FPS Seedream profile. Keep source FPS metadata, but play retained frame sequences at 12 FPS.
+This document records frame-processing and Rive invariants for the 12 FPS Seedance profile. Keep source FPS metadata, but play retained frame sequences at 12 FPS.
 
 ## Default request handling
 
@@ -12,7 +12,7 @@ Apply this profile without asking for more parameters:
 4. Produce transparent full-resolution PNG frames.
 5. Resize to 50% with Lanczos.
 6. Produce optimized PNG and RGBA WebP at quality 82 and method 6.
-7. Generate one high-resolution Seedream return storyboard for every whole-second and end-of-media cut point and slice exactly 12 ordered frames from it.
+7. Generate one four-second Seedance 2.5 return video for every whole-second and end-of-media cut point; uniformly sample exactly 12 frames over the complete video.
 8. Replace generated return endpoints with exact source frames.
 9. Build one combined Rive project sized to the reduced frames.
 10. Verify frame continuity, Rive structure, local build, and sampled renders.
@@ -79,35 +79,21 @@ Validate dimensions, frame counts, numeric ordering, and alpha channels before p
 
 ### 4. Generate twelve-frame returns
 
-Read [storyboard-geometry.md](storyboard-geometry.md) for source-ratio equations, exact pixel geometry, hard technical checks and advisory visual review. Exact canvas dimensions allow fixed-grid slicing; they do not certify subject placement or visual quality. Record those imperfections and continue without per-panel resizing or regeneration.
+Read [seedance-return-video.md](seedance-return-video.md) for the request, prompt and full-video sampling contract. Run `scripts/build_seedance_return_videos.py` for every cut point, followed by `scripts/process_seedance_return_frames.py` using the exact RGBA source endpoints.
 
-Run `scripts/build_seedream_return_frames.py` once for every cut point. The helper:
+The default helper uses `doubao-seedance-2-5-260628`, requests four seconds, and saves the complete generated video. It sends exact RGB source boundary/first frames, requests a fixed camera and full-frame motion throughout all four seconds, and retains the actual prompt. It does not trim to the first second.
 
-- saves exact source endpoints;
-- creates one transparent RGBA reference containing the boundary pose and source first pose side by side;
-- requests one source-ratio-derived transparent PNG storyboard, producing twelve equal cells with no gutters or labels (`2016x2268` canvas and `504x756` cells for `512x768` sources);
-- resizes generated interior images to the source dimensions before endpoint replacement;
-- slices the 4x3 storyboard row-major and requires exactly 12 frames;
-- stores remote URL-free sanitized response metadata;
-- replaces frames `0` and `11` with exact endpoints;
-- preserves verified provider Alpha, or mattes only the RGB fallback frames, then optimizes all 12 frames;
-- reports 12 FPS and one-second return timing.
+The processor saves twelve native sampled RGB PNGs selected across all decoded frames, including both endpoints. It preserves the source aspect ratio with at most a one-pixel background pad for provider rounding, uniformly resizes to source dimensions, saves complete RGB PNGs and applies the same matte rules as the source. It keeps the generated RGBA poses, restores exact source RGBA files at indices 0 and 11 without blending, and produces half-resolution PNG/WebP. Source `frameMap` determines the boundary endpoint; never mistake decoded source index 72 for retained index 72 in a 24-to-12 FPS conversion.
 
-Seedream transparent output has a strict input contract: exactly one input image, the input must be a PNG containing real Alpha, and the output must be PNG. `background: transparent` is rejected for RGB input, multiple input images, or non-PNG output. Use `n: 1` and request one transparent 4x3 storyboard. Seedream rejects generation areas above `4624220` pixels; `2016x2268` is below this limit and provides much more detail than the earlier `1024x1152` storyboard.
+Check both the actual generated-video timing and the output timing. A four-second 24 FPS provider result may contain 97 frames including the endpoint at t=4 seconds; that final display interval is valid. The Rive return must still contain exactly twelve ordered image files and run at 12 FPS for one second. Similar/repeated poses do not count as missing frames.
 
-Both the transparent and RGB prompts must request crisp high-resolution 2D art, sharp edges, fine facial, hair, and clothing detail, and no blur or compression artifacts. Validate the exact canvas and source-ratio cell dimensions (`504x756`, 2:3 for the current sources), then slice a fixed four-column, three-row grid in row-major order. Subject placement and panel continuity are advisory visual checks. Do not use 12 unrelated independent requests.
-
-If transparent generation fails or the returned PNG lacks real Alpha, automatically use the generated `request_rgb_fallback.json`. That request uses two RGB endpoint inputs and requires a flat `RGB(235,235,235)` background with no gradient, texture, noise, vignette, floor, shadow, backdrop object, text, or watermark. Save every fallback frame as a complete RGB PNG in `processed/frames_rgb` before matting. Run `rembg` and the inclusive `230..241` border-connected background rule only on those saved RGB fallback files. When provider Alpha is present, preserve it and do not run `rembg`; only fill enclosed transparent holes and keep the RGB files as an audit view.
-
-When Seedream's output safety rejects a clearly child-safe animated subject, retry with explicit non-sensitive wording such as fully clothed, child-friendly, and no nudity, violence, injury, weapons, or adult themes. Keep every temporal, identity, endpoint, scale, and framing requirement unchanged.
-
-If the safe wording is still rejected, use `scripts/build_local_return_frames.py` as the final local fallback. It samples 12 evenly spaced poses from the exact boundary source frame to exact source frame `0`, preserves natural source motion, and records `source_reverse_sampling` in `fallback.json`. Do not describe this fallback as generated imagery.
+The old Seedream helpers and storyboard geometry are retained only for explicitly requested legacy runs. Do not use them or source-reverse sampling as an automatic Seedance failure fallback.
 
 ### 5. Record return appearance and motion
 
-Inspect raw boards, grid overlays and contact sheets when available. Record scale/feet drift, uneven motion, early arrival or repeated poses, expression reversals, gutters, clipping, background residue and detail changes as warnings. Continue with the generated frames without regeneration or an approval gate. If viewing is unavailable, record that limitation and continue the technical workflow.
+Inspect native sampled frames, contact sheets and the one-second playback preview when available. Record scale/feet drift, uneven motion, early arrival or repeated poses, expression reversals, clipping, background residue and detail changes as warnings. Continue with the generated frames without regeneration or an approval gate. If viewing is unavailable, record that limitation and continue the technical workflow.
 
-Scale and anchor measurements are optional diagnostics, not rejection thresholds. `scripts/stabilize_return_scale.py` may optionally correct uniform interior drift; preserve exact endpoints and report any use. Do not conceal defects with adaptive crops, per-panel stretching or fragment deletion. Retry only actual API/transport or unusable-output failures, at most twice for the same failure. Stricter visual rejection requires an explicit user instruction.
+Scale and anchor measurements are optional diagnostics, not rejection thresholds. `scripts/stabilize_return_scale.py` may optionally correct uniform interior drift; preserve exact endpoints and report any use. Do not conceal defects with adaptive crops, nonuniform stretching or fragment deletion. Retry only actual API/transport or unusable-output failures, at most twice for the same failure. Stricter visual rejection requires an explicit user instruction.
 
 ### 6. Generate the combined Rive project
 
@@ -177,8 +163,8 @@ Assets are root elements before the `Artboard`. External frame changes are not w
 ## Common failure modes
 
 - `ModelNotOpen`: the model is not activated for the API account or activation has not propagated.
-- Wrong canvas dimensions, invalid source-ratio geometry or empty/missing usable frames: technical failures; correct the request or retry generation at most twice. Imperfect subject placement inside the fixed 4x3 grid is a warning, not a retry trigger.
-- Transparent request returns opaque RGB: reject it and use the exact `RGB(235,235,235)` fallback request before matting saved RGB PNGs.
+- Unreadable or wrong-duration video, incompatible source aspect ratio, or empty/missing usable frames: technical failures; correct the cause or retry generation at most twice. Appearance defects remain warnings.
+- About 48 frames or four-second returns: uniformly select twelve indices over the whole generated video; set Rive FPS and durationFrames to 12. Never fix timing by trimming the source video to its first second.
 - Blank first frame: inspect `Solo.activeComponentId` and target child `Image` IDs.
 - Frozen animation: verify `propertyKey="296"` and `KeyFrameId` keys.
 - Slow or fast playback: verify source and return FPS are both 12 and return duration is 12 frames.
@@ -191,6 +177,6 @@ Assets are root elements before the `Artboard`. External frame changes are not w
 
 ## Privacy and delivery
 
-- Keep source assets local unless the user explicitly requests upload or publishing.
+- Send the two reference endpoints to Seedance as part of requested generation; keep other source assets local unless upload or publishing is requested.
 - Do not put credentials, account IDs, provider request IDs, remote image URLs, CDN UUIDs, or personal paths in generated documentation.
 - `rive push`, `--publish`, and hosted assets require explicit user authorization.

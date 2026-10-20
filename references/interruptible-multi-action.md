@@ -1,6 +1,6 @@
 # Interruptible 12 FPS Multi-action Workflow
 
-This reference defines temporal sampling, cut points, Seedream return generation, manifests, and the state-machine contract for the 12 FPS profile.
+This reference defines temporal sampling, cut points, Seedance return generation, manifests, and the state-machine contract for the 12 FPS profile.
 
 ## Temporal sampling
 
@@ -36,27 +36,15 @@ Examples:
 
 An interruption at `t` is handled at the first boundary greater than or equal to `t`. If `t` is exactly a boundary, that boundary is used.
 
-## Seedream return generation
+## Seedance return generation
 
-Read [storyboard-geometry.md](storyboard-geometry.md) for source-ratio equations, exact pixel geometry, hard technical checks and advisory visual review. Exact canvas dimensions allow fixed-grid slicing; they do not certify subject placement or visual quality. Record those imperfections and continue without per-panel resizing or regeneration.
+Read [seedance-return-video.md](seedance-return-video.md) before generating returns. Use Seedance 2.5 (`doubao-seedance-2-5-260628`) for each source boundary. Send the complete exact RGB boundary frame and source frame `0` as first/last references, and request a four-second continuous return across the entire clip.
 
-For every boundary:
+Keep the full generated video. Sample twelve distinct ordered decoded frames with `round(i*(N-1)/11)`, including the first and last; this is different from sampling source motion at 12 FPS. Save native RGB frames, reconcile only one-pixel provider aspect rounding with background padding if needed, then resize the full frame uniformly to source dimensions and save RGB PNGs before matting.
 
-1. Save the exact RGB source boundary frame as `inputs/first_frame.png`.
-2. Save exact source frame `0` as `inputs/last_frame.png`.
-3. Build one transparent RGBA reference containing the two endpoints side by side, then send one `doubao-seedream-5-0-pro-260628` request for a source-ratio-derived transparent PNG 4x3 storyboard (`2016x2268` for `512x768` sources). Use `background: transparent`, `output_format: png`, and `n: 1`. Slice twelve equal source-ratio cells (`504x756`, 2:3 only for `512x768` sources) row-major and resize generated interiors back to the source dimensions.
-4. Prompt for complete natural return motion from the boundary pose to the first-frame pose across those 12 images.
-5. Prompt for consistent subject identity, face, clothing, body proportions, overall size, feet anchor, screen position, style, lighting, camera, framing, and background.
-6. Record zoom, scale/anchor drift, clipping, detail changes, uneven motion, expression reversals, gutters or other visual defects as warnings. Continue with usable generated frames without regeneration or an approval gate.
-7. Replace generated frame `0` and frame `11` with the exact source RGBA endpoints mapped by `extraction_manifest.json`.
-8. When generated frames contain real provider Alpha, preserve that Alpha and fill enclosed transparent holes without running `rembg`. For the RGB fallback only, keep complete RGB PNG frames in `processed/frames_rgb` first, then run the same border-connected RGB matte and transparent-hole repair as source frames. Downscale and write PNG/WebP derivatives afterward.
-9. Inspect raw boards, overlays and contact sheets when available; record any viewing limitation without blocking. Scale/anchor measurements are optional diagnostics. Optional uniform interior stabilization with `scripts/stabilize_return_scale.py` must preserve exact endpoints and be reported. Retry actual API/transport or unusable-output failures at most twice; stricter visual rejection applies only when explicitly requested.
+Use the same border-connected RGB `230..241` plus rembg matte as source frames. Replace output `0`/`11` with exact source RGBA endpoints found through `extraction_manifest.json`, without cross-fades. Downscale to 50% and export quality-82/method-6 PNG/WebP derivatives.
 
-Seedream transparent generation accepts exactly one input PNG containing real Alpha and rejects RGB inputs, multiple inputs, and non-PNG output. The default request therefore uses one left/right RGBA endpoint reference and returns one transparent 4x3 storyboard. Seedream also rejects generation areas above `4624220` pixels. For `512x768` sources use `2016x2268`; derive other layouts from the original single-frame ratio and require sharp edges, fine detail, and no blur or compression artifacts.
-
-Independent per-frame calls can drift and must be avoided. If transparent generation fails or the output lacks real Alpha, automatically retry with `request_rgb_fallback.json`: two RGB endpoint inputs, one source-ratio-derived 4x3 storyboard (`2016x2268` for `512x768` sources), and an exact flat `RGB(235,235,235)` background with no gradient, texture, noise, vignette, floor, shadow, backdrop object, text, or watermark. Save complete RGB PNGs before using border-connected `rembg` and the inclusive `230..241` color rule. Report the mode actually used.
-
-If Seedream output safety rejects the storyboard after non-sensitive prompt mitigation, use `scripts/build_local_return_frames.py` to sample the exact source motion in reverse at 12 evenly spaced poses. Record `source_reverse_sampling` as an exception and preserve the same return timing and exact endpoints.
+Record visual defects as warnings and continue with usable frames. Optional uniform stabilization must preserve endpoints and be reported. Do not regenerate merely for appearance, and do not silently substitute Seedream or source-reverse sampling. Retry actual technical failures at most twice; reconcile uncertain submissions before another paid POST.
 
 ## Return timing
 
@@ -95,7 +83,7 @@ All action frame directories must contain continuous numeric suffixes from `0`, 
           "boundaryFrame": 12,
           "fps": 12,
           "durationFrames": 12,
-          "framesDir": "a_seedream_returns/return_1000ms/processed/frames_50_webp"
+          "framesDir": "a_seedance_returns/return_1000ms/processed/frames_50_webp"
         }
       ]
     }
@@ -170,9 +158,9 @@ Also verify:
 
 ## Common failures
 
-- `ModelNotOpen`: activate `doubao-seedream-5-0-pro-260628` for the API account and retry after activation propagates.
-- Wrong canvas dimensions, invalid source-ratio geometry or empty/missing usable frames: technical failures; correct the request or retry generation at most twice. Imperfect subject placement inside the fixed 4x3 grid is a warning, not a retry trigger.
-- Transparent request returns opaque RGB: reject it and use the exact `RGB(235,235,235)` fallback request, then matte only saved RGB PNG frames.
+- `ModelNotOpen`: activate `doubao-seedance-2-5-260628` for the API account and retry after activation propagates.
+- Unreadable or wrong-duration video, incompatible source aspect ratio, or empty/missing usable frames: technical failures. Correct the cause or retry generation at most twice; do not stretch a wrong ratio or invent frames.
+- About 48 return frames or four-second Rive playback: sample twelve frames across the complete generated video and set Rive FPS/duration to 12/12. Do not truncate the generated video to one second.
 - Subject enlarges or shrinks during a return: record a warning and use the generated frames. Uniform interior stabilization is optional; keep exact endpoints and report any use.
 - Return starts early after a click: keep the original segment active and use a Boolean condition at its `100%` exit.
 - Return freezes on its endpoint: use the unconditional return-to-Router transition.

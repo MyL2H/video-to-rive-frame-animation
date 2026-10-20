@@ -1,5 +1,7 @@
 # Equal cells at the original image aspect ratio
 
+Legacy Seedream only: read this when the user explicitly requests storyboard generation. The default uses Seedance videos and does not slice a grid.
+
 Read this before generating or processing a return storyboard. The numerical canvas/cell contract controls deterministic slicing. Subject placement and appearance inside those cells are advisory by default; canvas dimensions alone do not prove semantic layout quality.
 
 ## Geometry contract
