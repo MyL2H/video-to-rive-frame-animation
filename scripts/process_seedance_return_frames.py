@@ -261,6 +261,15 @@ def main() -> None:
               "--background-min", 230, "--background-max", 241)
     generated = sorted(directories["generated_frames_rgba"].glob("frame_*.png"))
     generated_checks = frame_checks(generated, source_size, replaceable_endpoints=True)
+    # Compare generated masks with their own RGB before source endpoints replace
+    # frames 0/11. Comparing restored endpoints against generated RGB is invalid.
+    generated_matte_exit = run_skill(
+        "validate_matte.py", "--frames-dir", directories["generated_frames_rgba"],
+        "--rgb-dir", directories["frames_rgb"],
+        "--report", output / "generated_matte_validation.json",
+        "--contact-sheet", output / "generated_matte_contact_sheet.jpg",
+        advisory=True,
+    )
     for path in generated:
         shutil.copy2(path, directories["frames_rgba"] / path.name)
     targets = [directories["frames_rgba"] / "frame_0000.png", directories["frames_rgba"] / "frame_0011.png"]
@@ -283,7 +292,7 @@ def main() -> None:
               "png50": frame_checks(png, optimized_size), "webp50": frame_checks(webp, optimized_size)}
     matte_exit = run_skill("validate_matte.py", "--frames-dir", directories["frames_rgba"],
                            "--report", output / "matte_validation.json",
-                           "--contact-sheet", output / "matte_contact_sheet.jpg", advisory=True)
+                           "--contact-sheet", output / "matte_contact_sheet.jpg")
 
     labels = [f"{i:02d} video {sample['videoTimestampSeconds']:.2f}s" for i, sample in enumerate(samples)]
     endpoint_labels = list(labels)
@@ -302,9 +311,15 @@ def main() -> None:
         "sourceSize": list(source_size), "optimizedSize": list(optimized_size), "sampling": samples,
         "endpointPolicy": "Exact source RGBA file replacement at frames 0 and 11; no cross-fade",
         "endpointChecks": endpoint_checks, "frameChecks": checks,
-        "mattingPolicy": "Save complete RGB PNG first; border-connected rembg + RGB 230..241 and hole filling",
+        "mattingPolicy": "Save complete RGB PNG first; calibrated RGB-supported segmentation; preserve real gaps and refine only edges",
         "optimization": {"scale": 0.5, "webpQuality": 82, "webpMethod": 6},
         "matteValidatorExitCode": matte_exit, "visualChecksAreAdvisory": True,
+        "generatedMatteValidatorExitCode": generated_matte_exit,
+        "rgbMatteDiagnostic": {
+            "report": str(output / "generated_matte_validation.json"),
+            "scope": "Generated RGBA paired with generated RGB before exact source endpoint replacement",
+            "restoredEndpoints": "Review source RGB/RGBA diagnostics separately",
+        },
         "frameBoundsDiagnostic": {"foregroundBottomPxRange": [min(bottoms), max(bottoms)],
                                   "foregroundHeightPxRange": [min(heights), max(heights)],
                                   "note": "Alpha bounds include props; these are not body registration or scale estimates"},

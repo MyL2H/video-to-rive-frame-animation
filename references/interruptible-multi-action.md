@@ -42,7 +42,7 @@ Read [seedance-return-video.md](seedance-return-video.md) before generating retu
 
 Keep the full generated video. Sample twelve distinct ordered decoded frames with `round(i*(N-1)/11)`, including the first and last; this is different from sampling source motion at 12 FPS. Save native RGB frames, reconcile only one-pixel provider aspect rounding with background padding if needed, then resize the full frame uniformly to source dimensions and save RGB PNGs before matting.
 
-Use the same border-connected RGB `230..241` plus rembg matte as source frames. Replace output `0`/`11` with exact source RGBA endpoints found through `extraction_manifest.json`, without cross-fades. Downscale to 50% and export quality-82/method-6 PNG/WebP derivatives.
+Use the same calibrated RGB-supported matte as source frames; protect visible subject pixels and preserve true background gaps. Read [matte-quality.md](matte-quality.md). Replace output `0`/`11` with exact source RGBA endpoints found through `extraction_manifest.json`, without cross-fades. Downscale to 50% and export quality-82/method-6 PNG/WebP derivatives.
 
 Record visual defects as warnings and continue with usable frames. Optional uniform stabilization must preserve endpoints and be reported. Do not regenerate merely for appearance, and do not silently substitute Seedream or source-reverse sampling. Retry actual technical failures at most twice; reconcile uncertain submissions before another paid POST.
 

@@ -47,9 +47,9 @@ Run `scripts/extract_remove_background.py --target-fps 12 --rgb-output <stem>_fr
 - selects source frames at 12 FPS;
 - appends decoded source frame `N-1` when needed;
 - saves every retained source frame as a complete RGB PNG first;
-- runs `rembg` with `isnet-general-use` and CPU provider to identify outside background and edge alpha;
-- removes the union of border-connected `rembg` background and border-connected pixels in the inclusive per-channel range `230..241`;
-- closes tiny segmentation gaps, keeps complete foreground components, and fills enclosed transparent holes;
+- runs `rembg` with `isnet-general-use` and CPU provider as segmentation guidance;
+- estimates the nearly uniform gray background from border RGB samples and combines color evidence with segmentation, protecting clothing and props that differ from the background;
+- retains fine foreground details without size-only deletion, and distinguishes enclosed background gaps from accidental foreground holes;
 - disables rembg alpha matting for predictable runtime behavior;
 - writes RGBA PNGs with Pillow;
 - writes `extraction_manifest.json` with output-to-source frame mappings.
@@ -61,18 +61,18 @@ Expected counts for the current 24 FPS examples:
 | E03: 141 frames | 71 | `24,48,72,96,120,140` | `12,24,36,48,60,70` |
 | E06: 90 frames | 46 | `24,48,72,89` | `12,24,36,45` |
 
-Do not use a global RGB threshold as the final alpha. The source subject can contain pixels in the same `230..241` range as the background, and generated return interiors can shift away from that range. The union of border-connected `rembg` and color evidence plus foreground-component retention is the required protection against interior holes. The complete RGB directory is an auditable intermediate and must remain beside the transparent output.
+Do not use a global RGB threshold as the final alpha. The source subject can contain pixels in the same `230..241` range as the background, and generated return interiors can shift away from that range. Do not union independent color and rembg background masks: either classifier can then erase the subject on its own. Do not fill all enclosed transparency: this would make real gaps opaque. See [matte-quality.md](matte-quality.md) for the observed failure cases and review procedure. The complete RGB directory is an auditable intermediate and must remain beside the transparent output.
 
-Run `scripts/validate_matte.py` on each final RGBA sequence. Its zero-hole and transparent-edge metrics do not detect opaque background residue, so inspect its magenta contact sheet when available. Appearance findings, including this tool's nonzero status for holes or opaque edges, are advisory under the default policy. Missing, unreadable or fully empty frames remain technical failures. Transparent background between limbs is valid.
+Run `scripts/validate_matte.py` on each final RGBA sequence, adding `--rgb-dir` when matching saved RGB is available. Inspect its contrasting-background samples. Enclosed transparency and canvas-edge alpha are diagnostic by default; explicitly requested thresholds can enforce stricter checks. Missing, unreadable or fully empty frames remain technical failures. Compare to RGB to find subject pixels accidentally removed through a gap connected to the image border; counting enclosed holes cannot detect that error.
 
 ### 3. Downscale and compress
 
-`scripts/prepare_frame_assets.py` resizes with Lanczos and writes both PNG and WebP. Use:
+`scripts/prepare_frame_assets.py` resizes with premultiplied-alpha Lanczos and writes both PNG and WebP. Use:
 
 - scale `0.5`;
 - WebP quality `82`;
 - WebP compression method `6`;
-- RGBA preserved;
+- RGBA and genuine transparent gaps preserved; no unconditional hole filling after resize;
 - source transparent files unchanged.
 
 Validate dimensions, frame counts, numeric ordering, and alpha channels before proceeding.
@@ -91,7 +91,7 @@ The old Seedream helpers and storyboard geometry are retained only for explicitl
 
 ### 5. Record return appearance and motion
 
-Inspect native sampled frames, contact sheets and the one-second playback preview when available. Record scale/feet drift, uneven motion, early arrival or repeated poses, expression reversals, clipping, background residue and detail changes as warnings. Continue with the generated frames without regeneration or an approval gate. If viewing is unavailable, record that limitation and continue the technical workflow.
+Inspect native sampled frames, contact sheets and the one-second playback preview when available. Record generated scale/feet drift, uneven motion, early arrival or repeated poses, expression reversals, clipping and detail changes as warnings. Repair demonstrated matte regressions locally from the saved RGB; do not regenerate a successful video to fix its mask. Continue with the generated frames without regeneration or an approval gate. If viewing is unavailable, record that limitation and continue the technical workflow.
 
 Scale and anchor measurements are optional diagnostics, not rejection thresholds. `scripts/stabilize_return_scale.py` may optionally correct uniform interior drift; preserve exact endpoints and report any use. Do not conceal defects with adaptive crops, nonuniform stretching or fragment deletion. Retry only actual API/transport or unusable-output failures, at most twice for the same failure. Stricter visual rejection requires an explicit user instruction.
 

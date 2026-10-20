@@ -9,9 +9,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from rgb_matte import fill_enclosed_transparent
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
@@ -40,6 +37,48 @@ def output_size(source_size: tuple[int, int], args: argparse.Namespace) -> tuple
     return max(width, 1), max(height, 1)
 
 
+def resize_rgba_premultiplied(
+    source: Image.Image, size: tuple[int, int]
+) -> Image.Image:
+    """Resize color weighted by alpha; preserve intentional transparent gaps.
+
+    RGB values under zero alpha must not bleed into a feathered outline. Use
+    float channels to avoid quantizing very low coverage before resampling.
+    This step changes resolution only: it must not repair or fill the matte.
+    """
+    rgba = np.asarray(source.convert("RGBA"), dtype=np.float32)
+    alpha = rgba[:, :, 3] / 255.0
+    premultiplied = rgba[:, :, :3] * alpha[:, :, None]
+
+    def resize_channel(channel: np.ndarray) -> np.ndarray:
+        return np.asarray(
+            Image.fromarray(channel).resize(size, Image.Resampling.LANCZOS),
+            dtype=np.float32,
+        )
+
+    resized_alpha = np.clip(resize_channel(alpha), 0.0, 1.0)
+    resized_color = np.stack(
+        [resize_channel(premultiplied[:, :, channel]) for channel in range(3)],
+        axis=2,
+    )
+    # Lanczos can overshoot near an edge. Bound premultiplied channels by
+    # coverage before unpremultiplication, without expanding alpha support.
+    resized_color = np.clip(
+        resized_color, 0.0, resized_alpha[:, :, None] * 255.0
+    )
+    straight_color = np.divide(
+        resized_color,
+        resized_alpha[:, :, None],
+        out=np.zeros_like(resized_color),
+        where=resized_alpha[:, :, None] > 1e-8,
+    )
+    result = np.empty((*resized_alpha.shape, 4), dtype=np.uint8)
+    result[:, :, 3] = np.rint(resized_alpha * 255.0).astype(np.uint8)
+    result[:, :, :3] = np.rint(straight_color).astype(np.uint8)
+    result[result[:, :, 3] == 0, :3] = 0
+    return Image.fromarray(result)
+
+
 def main() -> None:
     args = parse_args()
     files = sorted(args.source.glob(args.pattern))
@@ -51,16 +90,11 @@ def main() -> None:
 
     first_size = Image.open(files[0]).size
     size = output_size(first_size, args)
-    resampling = getattr(Image, "Resampling", Image)
-
     for source_path in files:
         with Image.open(source_path) as source_image:
             if source_image.size != first_size:
                 raise ValueError(f"Frame size mismatch: {source_path}")
-            frame = source_image.convert("RGBA").resize(size, resampling.LANCZOS)
-        rgba = np.asarray(frame).copy()
-        rgba[:, :, 3] = fill_enclosed_transparent(rgba[:, :, 3])
-        frame = Image.fromarray(rgba)
+            frame = resize_rgba_premultiplied(source_image, size)
 
         frame.save(args.png_output / source_path.name, format="PNG", optimize=True)
         webp_path = args.webp_output / f"{source_path.stem}.webp"

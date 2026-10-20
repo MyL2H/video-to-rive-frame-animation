@@ -18,8 +18,8 @@ This is sufficient to process both videos completely. Use the defaults below wit
 ## Default profile
 
 - Preserve source motion speed at `12 FPS`. For 24 FPS sources retain every second decoded frame, and always retain the final decoded frame `N-1`.
-- Save complete RGB PNGs before matting. Remove the union of border-connected `rembg` background and border-connected pixels in the inclusive per-channel range `230..241`. Preserve complete foreground components, feather edges and fill enclosed transparent holes. Never remove every matching RGB pixel globally.
-- Resize RGBA frames proportionally to `50%` with Lanczos. Write optimized PNG and RGBA WebP, quality `82`, method `6`.
+- Save complete RGB PNGs before matting. For a nearly uniform gray background, estimate its color from the image border and combine RGB evidence with segmentation guidance. Treat `230..241` as background calibration/seeding guidance, not a global deletion rule. Protect visibly non-background clothing, fur and props even when rembg misclassifies them; preserve genuine background gaps, including enclosed gaps. Do not union independent background masks or fill every transparent hole. See [matte quality](references/matte-quality.md).
+- Resize RGBA frames proportionally to `50%` with premultiplied-alpha Lanczos. Preserve existing transparency through resizing; do not fill holes afterward. Write optimized PNG and RGBA WebP, quality `82`, method `6`.
 - Use every whole-second source boundary before the decoded end, plus source frame `N-1`. Map boundaries to retained frame indices through `extraction_manifest.json`.
 - For **every cut point**, use **Seedance 2.5**, model `doubao-seedance-2-5-260628`, to generate a **4-second** first/last-frame video: boundary RGB frame as `first_frame`, source RGB frame `0` as `last_frame`.
 - Request a smooth return across the entire four seconds with a locked camera, original source framing and margins, consistent subject size/position, and flat `RGB(235,235,235)` background. Save the exact prompt and request.
@@ -37,7 +37,7 @@ Complete generation, processing, build and requested integration when outputs ar
 
 Keep hard checks for readable video, usable duration and aspect ratio, twelve nonempty ordered RGBA frames, correct dimensions, exact source endpoints, 12 FPS / one-second timing, successful Rive build and working routing. Retry genuine API/transport failures or unusable output at most twice after the original attempt; preserve attempts and continue independent batch items. Fix authentication/model-availability errors before retrying. After an uncertain submission outcome, reconcile or resume the existing task rather than blindly submitting another paid request. Never claim a successful integration if required assets remain technically invalid.
 
-Inspect native sampled frames, contact sheets and playback when available. Record what was inspected and any viewing limitation. Optional uniform interior stabilization may improve drift but must preserve exact endpoints and be reported. No adaptive crops, nonuniform stretching or fragment deletion. Apply stricter visual rejection only when the user explicitly asks.
+Fix demonstrated processing defects from saved RGB inputs before delivery: accidental removal of visible subject pixels and opaque background-filled gaps are matte bugs, not reasons to regenerate motion or silently accept a known broken mask. Reuse successful Seedance videos. Inspect native sampled frames, RGB/RGBA comparisons, contact sheets on contrasting backgrounds and playback when available. Record what was inspected and any viewing limitation. Optional uniform interior stabilization may improve drift but must preserve exact endpoints and be reported. No adaptive crops, nonuniform stretching or fragment deletion. Apply stricter visual rejection only when the user explicitly asks.
 
 ## Tools and credentials
 
@@ -47,7 +47,7 @@ Endpoint submission to Seedance is part of the requested generation workflow. Do
 
 ## Workflow
 
-Read [interruptible-multi-action.md](references/interruptible-multi-action.md) before building the state machine, [seedance-return-video.md](references/seedance-return-video.md) before generating returns, and [verified-workflow.md](references/verified-workflow.md) for processing/verification details.
+Read [interruptible-multi-action.md](references/interruptible-multi-action.md) before building the state machine, [seedance-return-video.md](references/seedance-return-video.md) before generating returns, [matte-quality.md](references/matte-quality.md) before changing or reviewing masks, and [verified-workflow.md](references/verified-workflow.md) for processing/verification details.
 
 ### 1. Extract source frames
 
@@ -65,11 +65,12 @@ python scripts/prepare_frame_assets.py \
   --scale 0.5 --webp-quality 82 --webp-method 6
 python scripts/validate_matte.py \
   --frames-dir input_frames_12fps \
+  --rgb-dir input_frames_12fps_rgb \
   --report input_frames_12fps/matte_validation.json \
   --contact-sheet input_frames_12fps/matte_contact_sheet.jpg
 ```
 
-Confirm the decoded end frame is present and use `frameMap` to locate exact RGBA endpoints. Matte metrics for holes or opaque edges are advisory; inspect the contact sheet because metrics alone cannot detect every residue.
+Confirm the decoded end frame is present and use `frameMap` to locate exact RGBA endpoints. Enclosed transparent components may be real spaces between limbs or props. They are diagnostic, not a default zero-hole target. Compare saved RGB with RGBA on dark, light and saturated backgrounds; inspect adjacent frames for dropouts. Source-color mismatch metrics flag risks but do not prove semantic correctness.
 
 ### 2. Generate and process every return
 

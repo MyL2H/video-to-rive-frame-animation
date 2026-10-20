@@ -36,13 +36,13 @@ Save each sampled native RGB frame before resizing. Preserve the full-frame aspe
 
 ## Matte, endpoints and output timing
 
-Save source-size `frames_rgb` first. Reuse the skill's `remove_background.py` with inclusive RGB `230..241` plus border-connected rembg evidence, foreground retention and hole repair. Keep generated matte files separate from the exact-endpoint sequence.
+Save source-size `frames_rgb` first. Reuse the skill's `remove_background.py` with calibrated background color and color-supported rembg guidance. Protect light clothing and fine props; preserve actual background spaces even when enclosed. Read [matte-quality.md](matte-quality.md); do not use a zero-hole target or unconditional fill. Keep generated matte files separate from the exact-endpoint sequence.
 
 Restore frame `0` from the source cut RGBA file and frame `11` from source frame `0` RGBA, using the source extraction `frameMap`. Verify exact file hashes before optimizing. Do not blend/cross-fade the restored endpoints into generated poses.
 
 Write twelve full-resolution RGBA frames, half-resolution PNG and quality-82/method-6 RGBA WebP. Play at 12 FPS for one second; the Rive return repeats the held last-image key at timeline frame `12`. The generated video's FPS and four-second duration do not become the Rive playback timing.
 
-Review the contact sheet and a one-second preview. Uniform generated interior size can still differ from restored source endpoints; keep that observation as an advisory visual warning. Any optional stabilization must preserve exact endpoints and be disclosed.
+Review RGB/RGBA differences on dark, light and saturated backgrounds and a one-second preview. Fix confirmed mask errors from saved RGB without another generation request. Uniform generated interior size can still differ from restored source endpoints; keep that observation as an advisory visual warning. Any optional stabilization must preserve exact endpoints and be disclosed.
 
 ## Tested behavior
 

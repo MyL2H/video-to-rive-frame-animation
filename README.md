@@ -8,7 +8,7 @@ A Codex skill that converts videos into transparent 12 FPS frame assets and one 
 
 Each source video becomes one action. At every whole-second and end-of-media cut point, **Seedance 2.5** (`doubao-seedance-2-5-260628`) generates a **4-second** first/last-frame return video. The workflow uniformly samples **12 frames from the complete video**, restores exact source endpoints, and plays them at **12 FPS for 1 second** in Rive.
 
-Complete RGB PNGs are saved before border-connected background removal. Frames are resized to 50% with Lanczos and exported as PNG and RGBA WebP at quality 82/method 6. The complete generated videos and native sampled frames remain available for review. No storyboard slicing, first-second trimming or endpoint cross-fading is used in the default workflow.
+Complete RGB PNGs are saved before color-supported background removal. Segmentation alone cannot erase visibly non-background clothing or props, and genuine enclosed background gaps remain transparent. Frames are resized to 50% with premultiplied-alpha Lanczos and exported as PNG and RGBA WebP at quality 82/method 6. The complete generated videos and native sampled frames remain available for review. No storyboard slicing, first-second trimming or endpoint cross-fading is used in the default workflow.
 
 Appearance defects are advisory: record them and complete technically valid generation, build and requested integration. Retry only actual API/transport or unusable-output failures, at most twice. Do not silently switch to Seedream or source-reverse sampling. Legacy Seedream helpers remain for explicit requests and existing assets.
 
@@ -16,4 +16,4 @@ Appearance defects are advisory: record them and complete technically valid gene
 
 Requirements: Python 3, Pillow, NumPy, OpenCV, rembg/onnxruntime, Rive CLI (`rive`), and ModelArk access to Seedance 2.5. Credentials stay in a local environment file or environment variables and are never committed. Seedance generation requires sending the two endpoint references; publishing assets or using `rive push` requires separate authorization.
 
-See [SKILL.md](SKILL.md), [Seedance video generation](references/seedance-return-video.md), [cut points and routing](references/interruptible-multi-action.md), and [verification](references/verified-workflow.md).
+See [SKILL.md](SKILL.md), [Seedance video generation](references/seedance-return-video.md), [cut points and routing](references/interruptible-multi-action.md), [matte quality](references/matte-quality.md), and [verification](references/verified-workflow.md).

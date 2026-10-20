@@ -119,12 +119,12 @@ def main() -> None:
         "rgbOutput": str(rgb_output),
         "rgbOutputFrameCount": output_index,
         "mattingPolicy": (
-            "complete RGB PNG first; border-connected rembg background and RGB range; "
-            "rembg edge feather"
+            "complete RGB PNG first; calibrated RGB-supported segmentation; "
+            "narrow boundary refinement and background decontamination"
         ),
         "backgroundRange": [args.background_min, args.background_max],
         "edgePixels": args.edge_pixels,
-        "holePolicy": "fill enclosed transparent components",
+        "holePolicy": "preserve genuine background gaps; no unconditional hole filling",
         "frameMap": frame_map,
         "endFramePolicy": "always retain decoded source frame N-1",
     }
