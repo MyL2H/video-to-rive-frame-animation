@@ -4,7 +4,7 @@ This reference defines temporal sampling, cut points, Seedance return generation
 
 ## Temporal sampling
 
-The Rive timeline target is exactly 12 FPS. Preserve source motion speed by sampling the source at 12 frames per second.
+The Rive timeline target is exactly 12 FPS. First matte the complete original video at native resolution and FPS, using official BiRefNet-matting with 1024×1024 model input and official foreground-color estimation. Preserve a lossless FFV1/BGRA master containing real alpha. Then preserve source motion speed by sampling that master at 12 frames per second, saving matching original RGB audit PNGs. This backend processes frames independently; it is not a temporal neural model. Read [video-matting.md](video-matting.md) before processing.
 
 For source FPS `S`, target FPS `T=12`, and `N` decoded frames:
 
@@ -40,9 +40,9 @@ An interruption at `t` is handled at the first boundary greater than or equal to
 
 Read [seedance-return-video.md](seedance-return-video.md) before generating returns. Use Seedance 2.5 (`doubao-seedance-2-5-260628`) for each source boundary. Send the complete exact RGB boundary frame and source frame `0` as first/last references, and request a four-second continuous return across the entire clip.
 
-Keep the full generated video. Sample twelve distinct ordered decoded frames with `round(i*(N-1)/11)`, including the first and last; this is different from sampling source motion at 12 FPS. Save native RGB frames, reconcile only one-pixel provider aspect rounding with background padding if needed, then resize the full frame uniformly to source dimensions and save RGB PNGs before matting.
+Keep the full generated video and matte every frame at native resolution and FPS before sampling. Save a lossless FFV1/BGRA master and verify its dimensions, FPS and decoded count against the original clip. Sample twelve distinct ordered matching RGB/RGBA frames with `round(i*(N-1)/11)`, including the first and last; this is different from sampling source motion at 12 FPS. Preserve native RGB audit and RGBA samples. Reconcile only one-pixel provider aspect rounding with at most one padded row or column if needed; RGBA padding must be transparent. Resize the full frame uniformly to source dimensions using premultiplied alpha for RGBA, and retain normalized RGB audit PNGs.
 
-Use the same calibrated RGB-supported matte as source frames; protect visible subject pixels and preserve true background gaps. Read [matte-quality.md](matte-quality.md). Replace output `0`/`11` with exact source RGBA endpoints found through `extraction_manifest.json`, without cross-fades. Downscale to 50% and export quality-82/method-6 PNG/WebP derivatives.
+Use the same complete-video matting backend as source actions. Preserve imported alpha without rembg, gray-threshold cleanup or unconditional hole filling; those older processing helpers are explicit legacy options only. Protect visible subject pixels and preserve true background gaps. Read [matte-quality.md](matte-quality.md). Replace output `0`/`11` with exact source RGBA endpoints found through `extraction_manifest.json`, without cross-fades. Only afterward downscale to 50% with premultiplied-alpha Lanczos and export PNG plus quality-82/method-6 RGBA WebP.
 
 Record visual defects as warnings and continue with usable frames. Optional uniform stabilization must preserve endpoints and be reported. Do not regenerate merely for appearance, and do not silently substitute Seedream or source-reverse sampling. Retry actual technical failures at most twice; reconcile uncertain submissions before another paid POST.
 
@@ -147,6 +147,8 @@ rive project --once
 ```
 
 Then verify behavior with real pointer events. Sample interruption cut points, return frames at 0, 0.5, and 1 second, and restarted source frames. Image-match screenshots against complete candidate sequences because startup and capture time are not exact.
+
+Review continuous matte playback and RGB/RGBA comparisons on dark, light and saturated backgrounds. Check thin feathers, pale clothing and actual background gaps for single-frame dropouts. Repair demonstrated local processing defects from saved video; this does not change the generation-warning policy.
 
 Also verify:
 

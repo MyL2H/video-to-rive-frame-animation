@@ -1,3 +1,3 @@
 interface:
   display_name: "Video to Rive Frame Animation"
-  short_description: "Build 12 FPS Rive actions with Seedance video returns"
+  short_description: "Matte full videos, then build 12 FPS Rive actions"

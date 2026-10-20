@@ -1,6 +1,6 @@
 ---
 name: video-to-rive-frame-animation
-description: Convert videos into transparent 12 FPS frame assets and one interruptible Rive multi-action timeline. Generate four-second Seedance 2.5 return videos, uniformly sample twelve frames, and play each return in one second. Use for sprite or character sequence playback, not vector rigging or skeletal animation.
+description: Remove video backgrounds with a validated matting model, then export transparent 12 FPS frames and one interruptible Rive multi-action timeline. Generate four-second Seedance 2.5 return videos and sample twelve frames for each one-second return. Use for sprite or character sequence playback, not vector rigging.
 ---
 
 # Video to Rive Frame Animation
@@ -17,14 +17,15 @@ This is sufficient to process both videos completely. Use the defaults below wit
 
 ## Default profile
 
-- Preserve source motion speed at `12 FPS`. For 24 FPS sources retain every second decoded frame, and always retain the final decoded frame `N-1`.
-- Save complete RGB PNGs before matting. For a nearly uniform gray background, estimate its color from the image border and combine RGB evidence with segmentation guidance. Treat `230..241` as background calibration/seeding guidance, not a global deletion rule. Protect visibly non-background clothing, fur and props even when rembg misclassifies them; preserve genuine background gaps, including enclosed gaps. Do not union independent background masks or fill every transparent hole. See [matte quality](references/matte-quality.md).
+- Matte the **complete video at its original frame rate before sampling PNGs**. The verified local default is the official **BiRefNet-matting** checkpoint with foreground-color estimation. Save a lossless video with real alpha (`transparent_master.mkv`, FFV1/BGRA). This is a mature per-frame model applied to every video frame, not a temporal neural model. See [video matting](references/video-matting.md) for setup, backend selection and verification.
+- Extract source motion at `12 FPS` from that transparent master. For 24 FPS sources retain every second decoded frame, and always retain the final decoded frame `N-1`. Preserve the original video and matching sampled RGB PNGs for comparison.
+- Do not run the old rembg/color-rule matte over imported alpha. Protect light clothing, fine props and genuine background gaps; do not fill holes or delete pale pixels globally. The older helpers are explicit legacy options, not the default. See [matte quality](references/matte-quality.md).
 - Resize RGBA frames proportionally to `50%` with premultiplied-alpha Lanczos. Preserve existing transparency through resizing; do not fill holes afterward. Write optimized PNG and RGBA WebP, quality `82`, method `6`.
 - Use every whole-second source boundary before the decoded end, plus source frame `N-1`. Map boundaries to retained frame indices through `extraction_manifest.json`.
 - For **every cut point**, use **Seedance 2.5**, model `doubao-seedance-2-5-260628`, to generate a **4-second** first/last-frame video: boundary RGB frame as `first_frame`, source RGB frame `0` as `last_frame`.
 - Request a smooth return across the entire four seconds with a locked camera, original source framing and margins, consistent subject size/position, and flat `RGB(235,235,235)` background. Save the exact prompt and request.
 - Preserve the complete generated video. Uniformly sample **12 frames across all decoded frames**, including both endpoints: `round(i * (N-1) / 11)`, `i=0..11`. Do not trim to the first second or extract at 12 FPS from the four-second video, which would produce about 48 frames.
-- Save full native sampled RGB PNGs, normalize the complete frame to the source aspect ratio without cropping or stretching, then save source-size RGB PNGs before applying the same matte workflow. See [Seedance returns](references/seedance-return-video.md) for provider pixel rounding.
+- Matte each entire generated video at native resolution before selecting the twelve frames. Save native RGB and RGBA samples, then normalize the complete frame to the source aspect ratio without cropping or stretching. Resize RGBA with premultiplied alpha; any one-pixel aspect padding is transparent. See [Seedance returns](references/seedance-return-video.md).
 - Replace output frames `0` and `11` with the **exact source RGBA endpoint files**. Do not cross-fade. Downscale and compress afterward.
 - Play those twelve ordered frames at **12 FPS for exactly 1 second**. Add a repeated held key for the final image at Rive frame `12`.
 - Build one multi-action Rive project, verify it, build locally, and render pointer-driven interruption and routing checks.
@@ -41,23 +42,26 @@ Fix demonstrated processing defects from saved RGB inputs before delivery: accid
 
 ## Tools and credentials
 
-Use Python 3 with Pillow, OpenCV, `rembg`, `onnxruntime` and NumPy; a local rembg model; the Rive CLI named `rive`; and ModelArk access to the Seedance model above. Read `ARK_API_KEY` or the existing `SEEDANCE_API_KEY_ID` / `SEEDANCE_API_KEY_SECRET` pair from a local environment file or environment variables. Never print or commit credentials. Keep task IDs and signed download URLs in private local task/status files, separate from public manifests.
+Use an isolated Python environment with PyTorch, torchvision, the official BiRefNet implementation/checkpoint, Pillow, OpenCV, NumPy and FFmpeg; see [video-matting.md](references/video-matting.md) for tested dependencies. The older `rembg`/`onnxruntime` dependencies are only needed for explicit legacy processing. Also use the Rive CLI named `rive` and ModelArk access to the Seedance model above. Read `ARK_API_KEY` or the existing `SEEDANCE_API_KEY_ID` / `SEEDANCE_API_KEY_SECRET` pair from a local environment file or environment variables. Never print or commit credentials. Keep task IDs and signed download URLs in private local task/status files, separate from public manifests.
 
 Endpoint submission to Seedance is part of the requested generation workflow. Do not publish other source assets, use `rive push`, or upload application builds without user authorization.
 
 ## Workflow
 
-Read [interruptible-multi-action.md](references/interruptible-multi-action.md) before building the state machine, [seedance-return-video.md](references/seedance-return-video.md) before generating returns, [matte-quality.md](references/matte-quality.md) before changing or reviewing masks, and [verified-workflow.md](references/verified-workflow.md) for processing/verification details.
+Read [video-matting.md](references/video-matting.md) before processing backgrounds, [interruptible-multi-action.md](references/interruptible-multi-action.md) before building the state machine, [seedance-return-video.md](references/seedance-return-video.md) before generating returns, and [matte-quality.md](references/matte-quality.md) when reviewing masks. [verified-workflow.md](references/verified-workflow.md) records downstream invariants.
 
 ### 1. Extract source frames
 
-Inspect source dimensions, FPS, decoded count and representative frames. Confirm a simple background suitable for the matte method. For complex backgrounds, choose an appropriate matte method instead of applying the gray rule blindly.
+Inspect source dimensions, FPS, decoded count and representative frames. The current helpers require constant frame rate (CFR) and check actual frame timestamps; reject variable-rate or discontinuous timing rather than silently changing playback speed. Test the selected model on thin props, pale clothing and a short continuous segment before a full batch. Then process all frames and extract PNGs from the alpha video. `$BIREFNET_REPO` and `$BIREFNET_CHECKPOINT` below are paths to the verified local installation.
 
 ```bash
-python scripts/extract_remove_background.py \
-  --video input.mp4 --output input_frames_12fps \
-  --rgb-output input_frames_12fps_rgb --target-fps 12 \
-  --background-min 230 --background-max 241
+python scripts/matte_video.py \
+  --video input.mp4 --output-dir input_matted \
+  --model-repo "$BIREFNET_REPO" --checkpoint "$BIREFNET_CHECKPOINT"
+python scripts/extract_alpha_video_frames.py \
+  --video input_matted/transparent_master.mkv --source-video input.mp4 \
+  --mode source --output input_frames_12fps \
+  --rgb-output input_frames_12fps_rgb --target-fps 12
 python scripts/prepare_frame_assets.py \
   --source input_frames_12fps \
   --png-output input_frames_12fps_50_png \
@@ -80,8 +84,13 @@ Example: source frame `72` is the 3-second cut for a 24 FPS source. It maps to r
 python scripts/build_seedance_return_videos.py \
   --video input.mp4 --output-root input_seedance_returns \
   --boundary-frame 72 --env-file .env.seedance run
+python scripts/matte_video.py \
+  --video input_seedance_returns/return_3000ms/generated_full.mp4 \
+  --output-dir input_seedance_returns/return_3000ms/matted \
+  --model-repo "$BIREFNET_REPO" --checkpoint "$BIREFNET_CHECKPOINT"
 python scripts/process_seedance_return_frames.py \
   --video input_seedance_returns/return_3000ms/generated_full.mp4 \
+  --alpha-video input_seedance_returns/return_3000ms/matted/transparent_master.mkv \
   --first-frame input_frames_12fps/frame_0036.png \
   --last-frame input_frames_12fps/frame_0000.png \
   --output-dir input_seedance_returns/return_3000ms/processed
@@ -89,7 +98,7 @@ python scripts/process_seedance_return_frames.py \
 
 The generation helper supports `prepare`, `submit`, `poll`, `download` and `run` so saved tasks can be resumed. Use short polls with other work between them. Reuse a successful video instead of making another generation request. Review the actual `prompt.txt` before submission when the user asks to see it; save any customized prompt in the request too.
 
-The processing helper samples the full clip, saves RGB audit files, mattes saved images, preserves generated interiors, restores exact RGBA endpoints, optimizes all twelve frames and writes timing/geometry manifests. Neither the old “complete motion in the first second” prompt nor first-second trimming is part of this workflow.
+The processor validates the full alpha video's FPS, dimensions and decoded count against the original, samples both clips, saves RGB audit files, preserves imported alpha, restores exact RGBA endpoints and optimizes all twelve frames. An opaque MP4 with a black background is not a transparent master. Neither the old “complete motion in the first second” prompt nor first-second trimming is part of this workflow.
 
 ### 3. Build and verify Rive
 
@@ -117,7 +126,8 @@ Report source dimensions/FPS/counts, retained counts, cut points and generated r
 
 ```text
 <stem>_frames_12fps/                   full-resolution source RGBA + frameMap
-<stem>_frames_12fps_rgb/               complete source RGB before matting
+<stem>_matted/transparent_master.mkv   complete original-FPS lossless alpha video
+<stem>_frames_12fps_rgb/               matching sampled original RGB for audit
 <stem>_frames_12fps_50_png/
 <stem>_frames_12fps_50_webp/
 <stem>_seedance_returns/
@@ -127,9 +137,11 @@ Report source dimensions/FPS/counts, retained counts, cut points and generated r
     request.json                     request without credentials
     metadata.json
     generated_full.mp4               entire four-second generated video
+    matted/transparent_master.mkv    complete original-FPS alpha video
     processed/
       frames_native_rgb/             sampled complete provider frames
-      frames_rgb/                    complete source-size RGB before matting
+      generated_frames_native_rgba/  alpha-video samples before normalization
+      frames_rgb/                    complete source-size original RGB for audit
       generated_frames_rgba/          generated poses before endpoint restoration
       frames_rgba/                   exact source endpoints restored
       frames_50_png/

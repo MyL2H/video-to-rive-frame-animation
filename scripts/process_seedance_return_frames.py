@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Convert a complete four-second Seedance video into a twelve-frame return.
 
-This offline helper makes no generation calls. It preserves native RGB samples,
-applies this skill's matte pipeline, restores exact source RGBA endpoints, and
-writes 50% PNG/WebP assets for a one-second return at 12 FPS.
+This offline helper makes no generation calls. It imports a complete alpha video
+that was matted before sampling, preserves native RGB samples, restores exact
+source RGBA endpoints, and writes 50% PNG/WebP assets for a one-second return at
+12 FPS. The previous framewise matte requires an explicit legacy opt-in.
 """
 
 from __future__ import annotations
@@ -15,10 +16,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw
+from prepare_frame_assets import resize_rgba_premultiplied
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -208,12 +211,19 @@ def main() -> None:
     parser.add_argument("--first-frame", type=Path, required=True, help="Exact transparent source RGBA PNG at the cut point")
     parser.add_argument("--last-frame", type=Path, required=True, help="Exact transparent first source RGBA PNG")
     parser.add_argument("--output-dir", type=Path, required=True)
+    matte_input = parser.add_mutually_exclusive_group(required=True)
+    matte_input.add_argument("--alpha-video", type=Path,
+                             help="Complete video already processed by a matting model, with real alpha")
+    matte_input.add_argument("--legacy-rgb-matte", action="store_true",
+                             help="Explicitly opt into the older rembg/color-rule method")
     args = parser.parse_args()
     video, output = args.video.resolve(), args.output_dir.resolve()
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        raise ValueError(f"Output directory must be absent or empty: {output}")
     endpoints = [args.first_frame.resolve(), args.last_frame.resolve()]
     source_size = check_endpoints(endpoints)
     optimized_size = tuple(max(1, round(dimension * 0.5)) for dimension in source_size)
-    for helper in ("remove_background.py", "prepare_frame_assets.py", "validate_matte.py"):
+    for helper in ("prepare_frame_assets.py", "validate_matte.py"):
         if not (SCRIPTS / helper).is_file():
             raise FileNotFoundError(SCRIPTS / helper)
     decoded, video_info = read_video(video, source_size)
@@ -222,7 +232,8 @@ def main() -> None:
         raise ValueError("Sampling must span the complete video in twelve distinct frames")
 
     directories = {key: output / key for key in (
-        "frames_native_rgb", "frames_rgb", "generated_frames_rgba", "frames_rgba",
+        "frames_native_rgb", "frames_rgb", "generated_frames_native_rgba",
+        "generated_frames_rgba", "frames_rgba",
         "frames_50_png", "frames_50_webp",
     )}
     expected_names = {f"frame_{i:04d}" for i in range(FRAME_COUNT)}
@@ -256,9 +267,35 @@ def main() -> None:
         "sourceSize": list(source_size), "samples": samples,
     })
 
-    run_skill("remove_background.py", "--source", directories["frames_rgb"],
-              "--output", directories["generated_frames_rgba"],
-              "--background-min", 230, "--background-max", 241)
+    alpha_import = None
+    if args.alpha_video:
+        from extract_alpha_video_frames import extract_alpha_video
+        # Matting happens on every native video frame before temporal sampling.
+        # This import validates the full alpha stream against the original clip.
+        with tempfile.TemporaryDirectory(prefix=".alpha-import-", dir=output) as tmp:
+            sampled = Path(tmp) / "frames"
+            alpha_import = extract_alpha_video(
+                args.alpha_video, video, sampled, mode="return")
+            imported_indices = [item["sourceFrame"] for item in alpha_import["frameMap"]]
+            if imported_indices != indices:
+                raise ValueError("Alpha video sampling does not match RGB video sampling")
+            for path in sorted(sampled.glob("frame_*.png")):
+                shutil.copy2(path, directories["generated_frames_native_rgba"] / path.name)
+                with Image.open(path) as image:
+                    rgba_image = image.convert("RGBA")
+                if rgba_image.size != normalized_size:
+                    padded = Image.new("RGBA", normalized_size, (0, 0, 0, 0))
+                    padded.paste(rgba_image, (0, 0))
+                    rgba_image = padded
+                if rgba_image.size != source_size:
+                    rgba_image = resize_rgba_premultiplied(rgba_image, source_size)
+                rgba_image.save(directories["generated_frames_rgba"] / path.name,
+                                format="PNG", optimize=True)
+        write_json(output / "alpha_video_sampling_manifest.json", alpha_import)
+    else:
+        run_skill("remove_background.py", "--source", directories["frames_rgb"],
+                  "--output", directories["generated_frames_rgba"],
+                  "--background-min", 230, "--background-max", 241)
     generated = sorted(directories["generated_frames_rgba"].glob("frame_*.png"))
     generated_checks = frame_checks(generated, source_size, replaceable_endpoints=True)
     # Compare generated masks with their own RGB before source endpoints replace
@@ -311,7 +348,12 @@ def main() -> None:
         "sourceSize": list(source_size), "optimizedSize": list(optimized_size), "sampling": samples,
         "endpointPolicy": "Exact source RGBA file replacement at frames 0 and 11; no cross-fade",
         "endpointChecks": endpoint_checks, "frameChecks": checks,
-        "mattingPolicy": "Save complete RGB PNG first; calibrated RGB-supported segmentation; preserve real gaps and refine only edges",
+        "mattingPolicy": (
+            "Matte complete native video before sampling; import real alpha without framewise re-matting"
+            if alpha_import else "Explicit legacy RGB-supported rembg/color-rule processing"
+        ),
+        "alphaVideo": alpha_import["alphaVideo"] if alpha_import else None,
+        "legacyRGBMatteUsed": bool(args.legacy_rgb_matte),
         "optimization": {"scale": 0.5, "webpQuality": 82, "webpMethod": 6},
         "matteValidatorExitCode": matte_exit, "visualChecksAreAdvisory": True,
         "generatedMatteValidatorExitCode": generated_matte_exit,
